@@ -58,6 +58,7 @@ const state = reactive({
   rememberToken: true,
   statusText: "",
   sessions: [],
+  liveSessions: [],
   continueSession: null,
   historyPage: {
     limit: 5,
@@ -622,8 +623,9 @@ async function hydrateSession(session, { includeMessages = false, silent = false
 async function refreshSessions() {
   const payload = await requestMobileHome({ recentLimit: 5 });
   const sessions = payload.recentSessions || [];
+  const liveSessions = payload.liveSessions || [];
   const continueSession = payload.continueSession || null;
-  for (const session of [continueSession, ...sessions].filter(Boolean)) {
+  for (const session of [...liveSessions, continueSession, ...sessions].filter(Boolean)) {
     const key = cacheKey(session);
     const title = String(session?.name || "").trim();
     if (!title) {
@@ -634,6 +636,7 @@ async function refreshSessions() {
       title
       };
   }
+  state.liveSessions = liveSessions;
   state.continueSession = continueSession;
   state.sessions = sessions;
   state.historyPage = {
@@ -868,11 +871,20 @@ function attachLiveSocket(sessionId, historyMessages = []) {
       if (state.activeSessionId === updated.id) {
         state.activeLiveSessionId = updated.id;
       }
+      const liveIndex = state.liveSessions.findIndex((item) => item.id === updated.id);
+      if (liveIndex >= 0) {
+        const nextLive = [...state.liveSessions];
+        nextLive[liveIndex] = updated;
+        state.liveSessions = nextLive;
+      }
       const index = state.sessions.findIndex((item) => item.id === updated.id);
       if (index >= 0) {
         const next = [...state.sessions];
         next[index] = updated;
         state.sessions = next;
+      }
+      if (state.continueSession?.id === updated.id) {
+        state.continueSession = updated;
       }
       return;
     }
@@ -1113,7 +1125,7 @@ async function ensureLiveSession() {
   const resumeSessionId = String(state.activeSessionMeta.resumeSessionId || "").trim();
   const provider = String(state.activeSessionMeta.provider || "").trim().toLowerCase();
   if (resumeSessionId && provider) {
-    const reusable = state.sessions
+    const reusable = state.liveSessions
       .filter(
         (session) =>
           session.kind === "live" &&
@@ -1236,6 +1248,7 @@ async function backToList() {
   state.activeSessionId = "";
   state.activeLiveSessionId = "";
   state.activeSessionMeta = null;
+  state.liveSessions = [];
   state.continueSession = null;
   composerDraft.value = "";
   setMessages([]);

@@ -1458,6 +1458,7 @@ export class SessionManager {
         .map((session) => session.id)
     );
     return {
+      liveSessions,
       continueSession,
       recentSessions,
       historyPage: {
