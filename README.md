@@ -1,124 +1,151 @@
-# Codex Web Terminal
+# ENYQUANT Codex With Phone
 
 English | [简体中文](./README.zh-CN.md)
 
-One thing only: use local `codex` sessions in your browser (including mobile).
+Use your local `codex` sessions from desktop and phone.
 
-Currently supports **Codex** only.
+This repo is focused on one workflow:
+
+- continue an existing Codex thread from your phone
+- create a new Codex session from your phone
+- browse recent sessions quickly on mobile
+- access your desktop session remotely through Tailscale
 
 ## Screenshots
 
 <p align="center">
-  <img src="./docs/images/codex-web-terminal.jpg" alt="Codex Web Terminal mobile screenshot 1" width="280" />
-  <img src="./docs/images/codex-web-terminal2.jpg" alt="Codex Web Terminal mobile screenshot 2" width="280" />
+  <img src="./docs/images/codex-web-terminal.jpg" alt="Mobile session list" width="280" />
+  <img src="./docs/images/codex-web-terminal2.jpg" alt="Mobile chat view" width="280" />
 </p>
 
-## Prerequisites
+## Requirements
 
 - Node.js 22+
-- `codex` CLI installed and available in `PATH`
-- For remote/external access: Tailscale installed on both desktop and phone, logged into the same account
+- `codex` CLI installed and working on the desktop
+- The desktop must already be able to use Codex successfully
+  - if your desktop needs a VPN to use Codex in your region, keep that VPN on
+- Tailscale installed on both desktop and phone for remote use
 
-## Quick Start (1 minute)
+## Branch Model
+
+- default branch: `develop`
+- stable branch: `main`
+- new task branches should start from `develop`
+- PR target branch should be `develop`
+
+## Quick Start
 
 ```bash
-git clone https://github.com/SZZH/codex-cc-web-terminal.git
-cd codex-cc-web-terminal
-npm run setup
+git clone -b develop https://github.com/ShengrenHOU/enyquant-codex-with-phone.git
+cd enyquant-codex-with-phone
 ```
 
-`npm run setup` guides you through `.env` setup, optional Tailscale setup,
-dependency installation, and service startup.
+Create `.env` from the example and set at least:
 
-Or run manually (macOS / Linux):
-
-```bash
-cd codex-cc-web-terminal
-cp .env.example .env
-# Set your own ACCESS_TOKEN in .env
-npm install
-npm run dev:up
+```env
+HOST=0.0.0.0
+ACCESS_TOKEN=change-this
+TAILSCALE_ONLY=true
+DEFAULT_CWD=/your/workspace/path
+CODEX_APP_SERVER_ENABLED=true
 ```
 
-On Windows (PowerShell or CMD), use:
+Then install and check:
 
 ```bash
 npm install
+npm run check
+```
+
+## Run
+
+Windows:
+
+```bash
 npm run dev
 ```
 
-Open:
+macOS / Linux:
 
-- Frontend (recommended): `http://127.0.0.1:5173/#/sessions`
-- Backend direct: `http://127.0.0.1:3210` (or your custom `PORT`)
+```bash
+npm run dev
+```
 
-## Mobile Access (2 ways)
+Open on desktop:
 
-### A. Same Wi-Fi
+- `http://127.0.0.1:5173/#/sessions`
+- or backend direct: `http://127.0.0.1:3210/#/sessions`
 
-1. In `.env`, make sure `HOST=0.0.0.0`.
-2. Open on your phone: `http://<your-lan-ip>:3210`
-3. Sign in with `ACCESS_TOKEN`.
+## Remote Phone Access
 
-### B. Tailscale (recommended for remote network)
+This repo does not do public tunneling by itself.
+Remote access is provided through Tailscale.
 
-Required for this path: Tailscale on both desktop and mobile, signed into the same account.
-
-1. Install and sign in on desktop: [Tailscale](https://tailscale.com/download)
-2. Install Tailscale on Android/iOS and sign in to the same account
-3. On desktop, run:
+1. Keep the desktop powered on.
+2. Keep Tailscale connected on the desktop.
+3. Keep the Codex desktop environment working.
+   - if your desktop needs a VPN for Codex, keep the VPN connected there
+4. Keep this service running.
+5. On desktop, run:
 
 ```bash
 tailscale status
 tailscale ip -4
 ```
 
-4. Open on phone: `http://<desktop-100.x.x.x>:3210`
+6. On phone, open:
 
-Recommended `.env` option:
-
-```env
-TAILSCALE_ONLY=true
+```text
+http://<desktop-100.x.x.x>:3210/#/sessions
 ```
 
-## Deployment (PM2)
+7. Sign in with `ACCESS_TOKEN`.
+
+## Notes About Desktop Codex App
+
+- Phone and desktop can write to the same underlying Codex thread.
+- The Codex desktop app may not hot-refresh when the phone continues a thread.
+- If you continue a session from the phone, reopen that session in the desktop Codex app to see the latest content.
+
+## Windows Compatibility
+
+This repo includes a Windows-specific Codex spawn compatibility fix:
+
+- Codex processes are launched through `cmd.exe /c`
+- this avoids PowerShell shim issues that can cause `spawn EPERM` on Windows
+
+## Common Commands
 
 ```bash
+npm run dev
+npm run check
 npm run service:start
 npm run service:status
 npm run service:logs
 ```
 
-## Common Commands
-
-```bash
-npm run dev            # Cross-platform dev mode (server + web, foreground)
-npm run dev:up         # macOS/Linux: start dev in background
-npm run dev:down       # macOS/Linux: stop background dev processes
-npm run check          # Quick checks
-```
-
 ## Common Issues
 
-1. `Cross-origin request rejected`
-- Start with `npm run dev` (or `npm run dev:up` on macOS/Linux). Do not manually split startup commands.
+### Phone cannot connect
 
-2. `5173` is not reachable
-- Run `npm run dev` first, then check port:
-```bash
-# macOS/Linux
-lsof -iTCP:5173 -sTCP:LISTEN -n -P
+- confirm phone and desktop are logged into the same Tailscale account
+- confirm desktop Tailscale is online
+- confirm the service is listening on `3210`
+- confirm `TAILSCALE_ONLY=true` is not blocking a non-Tailscale path you are trying to use
 
-# Windows
-netstat -ano | findstr :5173
-```
+### Codex replies are slow
 
-3. Phone says desktop is offline
-- Check service status first: `npm run service:status`
-- Then verify network path: same Wi-Fi or same Tailnet
-- If you changed `PORT`, use the same port in your phone URL.
+- Tailscale is usually not the bottleneck
+- the desktop's own Codex connectivity is usually the main bottleneck
+- in China, if the desktop needs a VPN for Codex, keep that VPN stable
 
-## Open Source
+### Session list is slow on mobile
+
+- this repo now loads recent sessions first
+- older sessions are loaded on demand from the mobile session list
+- history messages default to the latest 3 messages for faster mobile hydration
+
+## License
 
 - [LICENSE](./LICENSE)
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
