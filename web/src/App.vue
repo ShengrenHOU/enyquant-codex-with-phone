@@ -5,7 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import ChatView from "./components/ChatView.vue";
 import LoginView from "./components/LoginView.vue";
 import SessionListView from "./components/SessionListView.vue";
-import { request, requestHistoricalSessionsPage, requestHistoryMessages, requestSessionById } from "./lib/api.js";
+import { request, requestHistoricalSessionsPage, requestHistoryMessages, requestMobileHome, requestSessionById } from "./lib/api.js";
 import { normalizeServerPayload } from "./lib/normalize-events.js";
 import {
   PREVIEW_FALLBACK,
@@ -58,8 +58,9 @@ const state = reactive({
   rememberToken: true,
   statusText: "",
   sessions: [],
+  continueSession: null,
   historyPage: {
-    limit: 10,
+    limit: 5,
     offset: 0,
     returned: 0,
     total: 0,
@@ -113,6 +114,8 @@ function decorateSession(session) {
     groupName: workspaceName(session.cwd)
   };
 }
+
+const continueSessionItem = computed(() => (state.continueSession ? decorateSession(state.continueSession) : null));
 
 function mergeSessionsById(existingSessions, incomingSessions) {
   const byId = new Map();
@@ -617,9 +620,10 @@ async function hydrateSession(session, { includeMessages = false, silent = false
 }
 
 async function refreshSessions() {
-  const payload = await request("/api/sessions");
-  const sessions = payload.sessions || [];
-  for (const session of sessions) {
+  const payload = await requestMobileHome({ recentLimit: 5 });
+  const sessions = payload.recentSessions || [];
+  const continueSession = payload.continueSession || null;
+  for (const session of [continueSession, ...sessions].filter(Boolean)) {
     const key = cacheKey(session);
     const title = String(session?.name || "").trim();
     if (!title) {
@@ -628,11 +632,12 @@ async function refreshSessions() {
     sessionCache[key] = {
       ...(sessionCache[key] || {}),
       title
-    };
+      };
   }
+  state.continueSession = continueSession;
   state.sessions = sessions;
   state.historyPage = {
-    limit: Number(payload?.historyPage?.limit || 10),
+    limit: Number(payload?.historyPage?.limit || 5),
     offset: Number(payload?.historyPage?.offset || 0),
     returned: Number(payload?.historyPage?.returned || 0),
     total: Number(payload?.historyPage?.total || 0),
@@ -664,7 +669,7 @@ async function loadMoreHistoricalSessions() {
         title
       };
     }
-    state.sessions = mergeSessionsById(state.sessions, incomingSessions);
+  state.sessions = mergeSessionsById(state.sessions, incomingSessions);
     state.historyPage = {
       limit: Number(payload?.page?.limit || state.historyPage.limit || 10),
       offset: Number(payload?.page?.offset || nextOffset),
@@ -1231,6 +1236,7 @@ async function backToList() {
   state.activeSessionId = "";
   state.activeLiveSessionId = "";
   state.activeSessionMeta = null;
+  state.continueSession = null;
   composerDraft.value = "";
   setMessages([]);
   if (route.name !== "sessions") {
@@ -1408,6 +1414,7 @@ if (typeof window !== 'undefined') {
         </header>
 
         <SessionListView
+          :continue-session="continueSessionItem"
           :groups="groupedSessions"
           :active-session-id="state.activeSessionId"
           :pending-session-id="state.pendingSessionId"

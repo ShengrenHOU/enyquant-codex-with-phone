@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref, watch } from "vue";
 
 const props = defineProps({
+  continueSession: { type: Object, default: null },
   groups: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: "" },
   pendingSessionId: { type: String, default: "" },
@@ -67,13 +68,6 @@ function toggleGroup(name) {
   expandedGroups.value = next;
 }
 
-function groupSubtitle(group) {
-  const count = group.sessions.length;
-  const latest = group.sessions[0]?.updatedAt;
-  const latestText = latest ? props.formatRelativeTime(latest) : "";
-  return latestText ? `最近 ${latestText}` : count ? `${count} 个会话` : "暂无更新时间";
-}
-
 function closeMenu() {
   openMenuGroupName.value = "";
 }
@@ -136,6 +130,24 @@ function menuStyle() {
   };
 }
 
+function continueSubtitle(session) {
+  const parts = [];
+  if (session?.groupName) {
+    parts.push(session.groupName);
+  }
+  if (session?.updatedAt) {
+    parts.push(`最近 ${props.formatRelativeTime(session.updatedAt)}`);
+  }
+  return parts.join(" · ");
+}
+
+function groupSubtitle(group) {
+  const count = group.sessions.length;
+  const latest = group.sessions[0]?.updatedAt;
+  const latestText = latest ? props.formatRelativeTime(latest) : "";
+  return latestText ? `最近 ${latestText}` : count ? `${count} 个会话` : "暂无更新时间";
+}
+
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", onGlobalPointerDown, true);
 }
@@ -150,6 +162,22 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="session-screen">
+    <section v-if="continueSession" class="continue-card">
+      <div class="continue-copy">
+        <p class="continue-kicker">继续最近会话</p>
+        <h2 class="continue-title">{{ continueSession.displayTitle }}</h2>
+        <p class="continue-subtitle">{{ continueSubtitle(continueSession) }}</p>
+      </div>
+      <button
+        type="button"
+        class="continue-btn"
+        :class="{ pending: continueSession.id === pendingSessionId, active: continueSession.id === activeSessionId }"
+        @click="emit('open', continueSession)"
+      >
+        继续
+      </button>
+    </section>
+
     <section v-if="groups.length" class="session-groups">
       <section v-for="group in groups" :key="group.name" class="session-group">
         <button
@@ -205,10 +233,10 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div v-if="!groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
+    <div v-if="!continueSession && !groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
 
     <button
-      v-if="groups.length && historyPage?.hasMore"
+      v-if="(continueSession || groups.length) && historyPage?.hasMore"
       type="button"
       class="load-more-btn"
       :disabled="loadingMoreHistory"
@@ -226,6 +254,69 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-width: 0;
   padding: 12px 12px 18px;
+}
+
+.continue-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(191, 177, 162, 0.68);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 248, 241, 0.98), rgba(247, 239, 231, 0.94));
+  box-shadow: 0 14px 30px rgba(120, 101, 84, 0.08);
+  padding: 16px 16px 15px;
+}
+
+.continue-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.continue-kicker {
+  margin: 0 0 6px;
+  color: rgba(142, 118, 95, 0.96);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.continue-title {
+  margin: 0;
+  color: rgba(56, 47, 39, 0.98);
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.continue-subtitle {
+  margin: 6px 0 0;
+  color: rgba(118, 103, 90, 0.95);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.continue-btn {
+  flex: 0 0 auto;
+  min-width: 76px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #b8a28d 0%, #a48d76 100%);
+  color: #fffdfa;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 13px 16px;
+  box-shadow: 0 12px 24px rgba(139, 117, 97, 0.16);
+}
+
+.continue-btn.pending {
+  opacity: 0.7;
+}
+
+.continue-btn.active {
+  background: linear-gradient(180deg, #9f866d 0%, #8d745c 100%);
 }
 
 .session-groups {

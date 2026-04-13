@@ -12,6 +12,19 @@ export async function handleSessionRoute(ctx, runtime) {
     return true;
   }
 
+  if (ctx.path === "/api/mobile-home" && ctx.method === "GET") {
+    if (!runtime.requireAuthorized(ctx)) {
+      return true;
+    }
+
+    const url = new URL(ctx.url, "http://localhost");
+    const payload = runtime.sessionManager.listMobileHome({
+      recentLimit: url.searchParams.get("recentLimit") || 5
+    });
+    runtime.json(ctx, 200, payload);
+    return true;
+  }
+
   if (ctx.path === "/api/history-sessions" && ctx.method === "GET") {
     if (!runtime.requireAuthorized(ctx)) {
       return true;

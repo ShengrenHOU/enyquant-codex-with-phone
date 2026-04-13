@@ -1432,6 +1432,44 @@ export class SessionManager {
     };
   }
 
+  listMobileHome({ recentLimit = 5 } = {}) {
+    const liveSessions = this.listLiveSessions();
+    const liveByResumeId = new Set(
+      liveSessions
+        .map((session) => this.resumeKey(session.provider, session.resumeSessionId))
+        .filter(Boolean)
+    );
+    const historySessions = this.listHistoricalSessions({ archived: false }).filter((session) => {
+      return !liveByResumeId.has(this.resumeKey(session.provider, session.resumeSessionId));
+    });
+    const combined = [...liveSessions, ...historySessions].sort((a, b) =>
+      String(b.updatedAt).localeCompare(String(a.updatedAt))
+    );
+    const continueSession =
+      liveSessions[0] ||
+      historySessions[0] ||
+      null;
+    const recentSessions = combined
+      .filter((session) => !continueSession || session.id !== continueSession.id)
+      .slice(0, Math.max(0, normalizeSessionLimit(recentLimit, 5)));
+    const surfacedHistoryIds = new Set(
+      [continueSession, ...recentSessions]
+        .filter((session) => session?.kind === "history")
+        .map((session) => session.id)
+    );
+    return {
+      continueSession,
+      recentSessions,
+      historyPage: {
+        limit: normalizeSessionLimit(recentLimit, 5),
+        offset: 0,
+        returned: surfacedHistoryIds.size,
+        total: historySessions.length,
+        hasMore: historySessions.length > surfacedHistoryIds.size
+      }
+    };
+  }
+
   listArchived() {
     return this.listHistoricalSessions({ archived: true });
   }
