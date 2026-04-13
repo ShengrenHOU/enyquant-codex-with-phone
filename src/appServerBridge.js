@@ -3,6 +3,14 @@ import { EventEmitter } from "node:events";
 
 import { WebSocket } from "ws";
 
+function spawnCodexProcess(command, args, options = {}) {
+  if (process.platform === "win32") {
+    const comspec = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
+    return spawn(comspec, ["/d", "/s", "/c", command, ...args], options);
+  }
+  return spawn(command, args, options);
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -61,7 +69,7 @@ export class AppServerBridge extends EventEmitter {
       return;
     }
     const args = ["app-server", "--listen", this.listenUrl];
-    this.proc = spawn(this.config.codexBin, args, {
+    this.proc = spawnCodexProcess(this.config.codexBin, args, {
       cwd: this.config.root,
       env: process.env,
       stdio: ["ignore", "ignore", "pipe"]

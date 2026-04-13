@@ -863,6 +863,92 @@ function basenameWithoutExtension(filePath) {
   return path.basename(filePath, path.extname(filePath));
 }
 
+function normalizeOffset(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function normalizeMessageLimit(limit, fallback = 3) {
+  const parsed = Number.parseInt(String(limit ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, 200);
+}
+
+function normalizeSessionLimit(limit, fallback = 10) {
+  const parsed = Number.parseInt(String(limit ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, 100);
+}
+
+function spawnCodexProcess(command, args, options = {}) {
+  if (process.platform === "win32") {
+    const comspec = process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe";
+    return spawn(comspec, ["/d", "/s", "/c", command, ...args], options);
+  }
+  return spawn(command, args, options);
+}
+
+function summarizeHistoricalParse(parsed, stat, filePath, fallbackCwd) {
+  return {
+    filePath,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    birthtimeMs: stat.birthtimeMs,
+    resumeSessionId: parsed.resumeSessionId || basenameWithoutExtension(filePath),
+    cwd: parsed.cwd || fallbackCwd,
+    title: String(parsed.title || "").trim(),
+    titleSource: String(parsed.titleSource || "").trim(),
+    firstUserMessage: String(parsed.firstUserMessage || "").trim(),
+    firstInput: String(parsed.firstInput || "").trim(),
+    fallbackInput: String(parsed.fallbackInput || "").trim(),
+    sessionType: parsed.sessionType === "subagent" ? "subagent" : "main",
+    parentThreadId: String(parsed.parentThreadId || "").trim(),
+    agentRole: String(parsed.agentRole || "").trim(),
+    agentNickname: String(parsed.agentNickname || "").trim(),
+    originator: String(parsed.originator || "").trim(),
+    sourceType: String(parsed.sourceType || "").trim()
+  };
+}
+
+function summarizeHistoricalEntryFromIndexedRecord(record) {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const resumeSessionId = String(record.resumeSessionId || "").trim();
+  const filePath = String(record.filePath || "").trim();
+  if (!resumeSessionId || !filePath) {
+    return null;
+  }
+
+  return {
+    filePath,
+    mtimeMs: Number(record.mtimeMs || 0),
+    size: Number(record.size || 0),
+    birthtimeMs: Number(record.birthtimeMs || record.mtimeMs || 0),
+    resumeSessionId,
+    cwd: String(record.cwd || "").trim(),
+    title: String(record.title || "").trim(),
+    titleSource: String(record.titleSource || "").trim(),
+    firstUserMessage: String(record.firstUserMessage || "").trim(),
+    firstInput: String(record.firstInput || "").trim(),
+    fallbackInput: String(record.fallbackInput || "").trim(),
+    sessionType: String(record.sessionType || "").trim() === "subagent" ? "subagent" : "main",
+    parentThreadId: String(record.parentThreadId || "").trim(),
+    agentRole: String(record.agentRole || "").trim(),
+    agentNickname: String(record.agentNickname || "").trim(),
+    originator: String(record.originator || "").trim(),
+    sourceType: String(record.sourceType || "").trim()
+  };
+}
+
 function contentTextItems(content) {
   if (typeof content === "string") {
     return [content];
@@ -1175,6 +1261,8 @@ export class SessionManager {
     this.appServerBridge = appServerBridge;
     this.sessions = new Map();
     this.providers = new Map(buildProviders(config).map((provider) => [provider.id, provider]));
+    this.historicalSessionFileCache = new Map();
+    this.historicalSessionSummaryIndexes = new Map();
     this.customNamesPath = path.join(this.config.dataDir, "session-names.json");
     this.archivedSessionsPath = path.join(this.config.dataDir, "archived-sessions.json");
     this.codexSessionIndexPath = path.join(path.dirname(this.config.codexSessionsDir), "session_index.jsonl");
@@ -1199,6 +1287,43 @@ export class SessionManager {
         }
       });
     }
+  }
+
+  historicalSessionIndexPath(providerId) {
+    return path.join(this.config.dataDir, `history-session-index-${String(providerId || "codex").trim()}.json`);
+  }
+
+  loadHistoricalSessionSummaryIndex(providerId) {
+    const normalizedProviderId = String(providerId || "codex").trim();
+    if (this.historicalSessionSummaryIndexes.has(normalizedProviderId)) {
+      return this.historicalSessionSummaryIndexes.get(normalizedProviderId);
+    }
+
+    const indexPath = this.historicalSessionIndexPath(normalizedProviderId);
+    const payload = readJsonFile(indexPath, {});
+    const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+    const byFilePath = new Map();
+    for (const entry of entries) {
+      const summary = summarizeHistoricalEntryFromIndexedRecord(entry);
+      if (!summary) {
+        continue;
+      }
+      byFilePath.set(summary.filePath, summary);
+    }
+
+    const index = { path: indexPath, byFilePath };
+    this.historicalSessionSummaryIndexes.set(normalizedProviderId, index);
+    return index;
+  }
+
+  saveHistoricalSessionSummaryIndex(providerId) {
+    const normalizedProviderId = String(providerId || "codex").trim();
+    const index = this.loadHistoricalSessionSummaryIndex(normalizedProviderId);
+    const payload = {
+      version: 1,
+      entries: [...index.byFilePath.values()].sort((left, right) => left.filePath.localeCompare(right.filePath))
+    };
+    fs.writeFileSync(index.path, JSON.stringify(payload, null, 2), "utf8");
   }
 
   getCodexThreadName(resumeSessionId) {
@@ -1281,19 +1406,30 @@ export class SessionManager {
       .map((session) => this.serialize(session));
   }
 
-  listAll() {
+  listAll({ historyLimit = 10 } = {}) {
     const liveSessions = this.listLiveSessions();
     const liveByResumeId = new Set(
       liveSessions
         .map((session) => this.resumeKey(session.provider, session.resumeSessionId))
         .filter(Boolean)
     );
-    const historySessions = this.listHistoricalSessions({ archived: false }).filter((session) => {
+    const allHistorySessions = this.listHistoricalSessions({ archived: false }).filter((session) => {
       return !liveByResumeId.has(this.resumeKey(session.provider, session.resumeSessionId));
     });
-    return [...liveSessions, ...historySessions].sort((a, b) =>
-      String(b.updatedAt).localeCompare(String(a.updatedAt))
-    );
+    const normalizedHistoryLimit = normalizeSessionLimit(historyLimit, 10);
+    const historySessions = allHistorySessions.slice(0, normalizedHistoryLimit);
+    return {
+      sessions: [...liveSessions, ...historySessions].sort((a, b) =>
+        String(b.updatedAt).localeCompare(String(a.updatedAt))
+      ),
+      historyPage: {
+        limit: normalizedHistoryLimit,
+        offset: 0,
+        returned: historySessions.length,
+        total: allHistorySessions.length,
+        hasMore: allHistorySessions.length > historySessions.length
+      }
+    };
   }
 
   listArchived() {
@@ -1657,7 +1793,7 @@ export class SessionManager {
     }
 
     const args = this.buildCodexJsonExecArgs(session, prompt);
-    const child = spawn(this.config.codexBin, args, {
+    const child = spawnCodexProcess(this.config.codexBin, args, {
       cwd: session.cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -1986,16 +2122,18 @@ export class SessionManager {
     };
   }
 
-  listHistoricalSessions({ archived = null } = {}) {
+  listHistoricalSessions({ archived = null, offset = 0, limit = null } = {}) {
+    const normalizedOffset = normalizeOffset(offset, 0);
     return [...this.providers.values()]
       .flatMap((provider) => this.listHistoricalSessionsForProvider(provider, { archived }))
-      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .slice(normalizedOffset, limit == null ? undefined : normalizedOffset + normalizeSessionLimit(limit, 10));
   }
 
   listHistoricalSessionsForProvider(provider, { archived = null } = {}) {
     const byResumeId = new Map();
 
-    for (const entry of this.scanHistoricalSessionsForProvider(provider)) {
+    for (const entry of this.scanHistoricalSessionSummariesForProvider(provider)) {
       const isArchived = this.isArchived(provider.id, entry.resumeSessionId);
       if (archived !== null && isArchived !== archived) {
         continue;
@@ -2011,14 +2149,97 @@ export class SessionManager {
     return [...byResumeId.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }
 
+  listHistoricalSessionsPage({ archived = false, offset = 0, limit = 10 } = {}) {
+    const allSessions = this.listHistoricalSessions({ archived });
+    const normalizedOffset = normalizeOffset(offset, 0);
+    const normalizedLimit = normalizeSessionLimit(limit, 10);
+    const sessions = allSessions.slice(normalizedOffset, normalizedOffset + normalizedLimit);
+    return {
+      sessions,
+      page: {
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+        returned: sessions.length,
+        total: allSessions.length,
+        hasMore: normalizedOffset + sessions.length < allSessions.length
+      }
+    };
+  }
+
+  scanHistoricalSessionSummariesForProvider(provider) {
+    const files = walkJsonlFiles(provider.sessionsDir);
+    const existingFiles = new Set(files);
+    const index = this.loadHistoricalSessionSummaryIndex(provider.id);
+    let changed = false;
+    const summaries = [];
+
+    for (const filePath of files) {
+      try {
+        const stat = fs.statSync(filePath);
+        const cached = index.byFilePath.get(filePath);
+        let summary = null;
+
+        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+          summary = cached;
+        } else {
+          const parsed = parseHistoricalFile(filePath);
+          summary = summarizeHistoricalParse(parsed, stat, filePath, this.config.defaultCwd);
+          index.byFilePath.set(filePath, summary);
+          changed = true;
+        }
+
+        if (!summary?.resumeSessionId) {
+          continue;
+        }
+        const isCodexCliSession =
+          /codex_cli/i.test(String(summary.originator || "")) || /^cli$/i.test(String(summary.sourceType || ""));
+        if (provider.id === "codex") {
+          const inIndex = this.hasCodexSessionIndexEntry(summary.resumeSessionId);
+          const keepByTemp = isSystemTemporaryCwd(summary.cwd);
+          const keepByCli = isCodexCliSession;
+          if (!inIndex && !keepByTemp && !keepByCli) {
+            continue;
+          }
+          const indexedTitle = this.getCodexThreadName(summary.resumeSessionId);
+          if (indexedTitle) {
+            summary = {
+              ...summary,
+              title: indexedTitle,
+              titleSource: "codex_session_index"
+            };
+            index.byFilePath.set(filePath, summary);
+            changed = true;
+          }
+        }
+        summaries.push(summary);
+      } catch {
+        // Ignore malformed or unreadable session files.
+      }
+    }
+
+    for (const filePath of [...index.byFilePath.keys()]) {
+      if (!existingFiles.has(filePath)) {
+        index.byFilePath.delete(filePath);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.saveHistoricalSessionSummaryIndex(provider.id);
+    }
+
+    return summaries;
+  }
+
   scanHistoricalSessionsForProvider(provider) {
     const files = walkJsonlFiles(provider.sessionsDir);
+    this.pruneHistoricalSessionFileCache(provider.sessionsDir, new Set(files));
     const entries = [];
 
     for (const filePath of files) {
       try {
         const stat = fs.statSync(filePath);
-        const parsed = parseHistoricalFile(filePath);
+        const parsed = this.parseHistoricalFileCached(filePath, stat);
         const id = parsed.resumeSessionId || basenameWithoutExtension(filePath);
         if (!id) {
           continue;
@@ -2066,9 +2287,43 @@ export class SessionManager {
     return entries;
   }
 
+  parseHistoricalFileCached(filePath, stat) {
+    const cached = this.historicalSessionFileCache.get(filePath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.parsed;
+    }
+
+    const parsed = parseHistoricalFile(filePath);
+    this.historicalSessionFileCache.set(filePath, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      parsed
+    });
+    return parsed;
+  }
+
+  pruneHistoricalSessionFileCache(rootDir, existingFiles) {
+    const normalizedRoot = path.resolve(String(rootDir || ""));
+    if (!normalizedRoot) {
+      return;
+    }
+
+    for (const filePath of [...this.historicalSessionFileCache.keys()]) {
+      const normalizedPath = path.resolve(filePath);
+      if (!normalizedPath.startsWith(normalizedRoot)) {
+        continue;
+      }
+      if (!existingFiles.has(filePath)) {
+        this.historicalSessionFileCache.delete(filePath);
+      }
+    }
+  }
+
   buildHistoricalSession(provider, entry, kind = "history") {
+    const updatedDate = entry?.stat?.mtime || new Date(Number(entry?.mtimeMs || Date.now()));
+    const createdDate = entry?.stat?.birthtime || new Date(Number(entry?.birthtimeMs || entry?.mtimeMs || Date.now()));
     const fallbackSavedName = `Saved ${path.basename(entry.cwd || this.config.defaultCwd)} ${formatShortTimestamp(
-      entry.stat.mtime,
+      updatedDate,
       this.config.timezone
     )}`;
     const titleSource = extractHistoricalTitleCandidate(entry.title);
@@ -2096,8 +2351,8 @@ export class SessionManager {
       cwd: entry.cwd,
       kind,
       status: kind === "archived" ? "archived" : "saved",
-      createdAt: entry.stat.birthtime.toISOString(),
-      updatedAt: entry.stat.mtime.toISOString(),
+      createdAt: createdDate.toISOString(),
+      updatedAt: updatedDate.toISOString(),
       exitCode: null,
       autoNamed: false,
       inputPreview: summarySource || titleSource || entry.firstInput || entry.fallbackInput || "",
@@ -2110,18 +2365,50 @@ export class SessionManager {
     };
   }
 
-  getHistoricalMessages(providerId, resumeSessionId) {
+  getHistoricalMessages(providerId, resumeSessionId, { limit = 3 } = {}) {
     const provider = this.getProvider(providerId);
     const targetId = String(resumeSessionId || "").trim();
-    const entries = this.scanHistoricalSessionsForProvider(provider).filter((item) => item.resumeSessionId === targetId);
-    if (!entries.length) {
+    const summaryEntries = this.scanHistoricalSessionSummariesForProvider(provider).filter(
+      (item) => item.resumeSessionId === targetId
+    );
+    if (!summaryEntries.length) {
       throw new Error(`Historical session not found: ${providerId}/${resumeSessionId}`);
     }
 
-    const entry = entries.sort((left, right) => right.stat.mtimeMs - left.stat.mtimeMs)[0];
+    const summary = summaryEntries.sort((left, right) => right.mtimeMs - left.mtimeMs)[0];
+    const stat = fs.statSync(summary.filePath);
+    const parsed = this.parseHistoricalFileCached(summary.filePath, stat);
+    const entry = {
+      filePath: summary.filePath,
+      stat,
+      resumeSessionId: parsed.resumeSessionId || summary.resumeSessionId,
+      cwd: parsed.cwd || summary.cwd || this.config.defaultCwd,
+      title: String(this.getCodexThreadName(parsed.resumeSessionId || summary.resumeSessionId) || parsed.title || summary.title || "").trim(),
+      titleSource: String(
+        this.getCodexThreadName(parsed.resumeSessionId || summary.resumeSessionId)
+          ? "codex_session_index"
+          : parsed.titleSource || summary.titleSource || ""
+      ).trim(),
+      firstUserMessage: parsed.firstUserMessage,
+      firstInput: parsed.firstInput,
+      fallbackInput: parsed.fallbackInput,
+      messages: parsed.messages,
+      sessionType: parsed.sessionType === "subagent" ? "subagent" : "main",
+      parentThreadId: String(parsed.parentThreadId || "").trim(),
+      agentRole: String(parsed.agentRole || "").trim(),
+      agentNickname: String(parsed.agentNickname || "").trim()
+    };
+    const normalizedLimit = normalizeMessageLimit(limit, 3);
+    const allMessages = entry.messages || [];
     return {
       session: this.buildHistoricalSession(provider, entry, this.isArchived(provider.id, entry.resumeSessionId) ? "archived" : "history"),
-      messages: entry.messages || []
+      messages: allMessages.slice(-normalizedLimit),
+      page: {
+        limit: normalizedLimit,
+        returned: Math.min(normalizedLimit, allMessages.length),
+        total: allMessages.length,
+        hasMore: allMessages.length > normalizedLimit
+      }
     };
   }
 
