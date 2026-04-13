@@ -4,7 +4,30 @@ export async function handleSessionRoute(ctx, runtime) {
       return true;
     }
 
-    runtime.json(ctx, 200, { sessions: runtime.sessionManager.listAll() });
+    const url = new URL(ctx.url, "http://localhost");
+    const payload = runtime.sessionManager.listAll({
+      historyLimit: url.searchParams.get("historyLimit") || 10
+    });
+    runtime.json(ctx, 200, payload);
+    return true;
+  }
+
+  if (ctx.path === "/api/history-sessions" && ctx.method === "GET") {
+    if (!runtime.requireAuthorized(ctx)) {
+      return true;
+    }
+
+    try {
+      const url = new URL(ctx.url, "http://localhost");
+      const payload = runtime.sessionManager.listHistoricalSessionsPage({
+        archived: false,
+        offset: url.searchParams.get("offset") || 0,
+        limit: url.searchParams.get("limit") || 10
+      });
+      runtime.json(ctx, 200, payload);
+    } catch (err) {
+      runtime.json(ctx, 400, { error: err?.message || String(err) });
+    }
     return true;
   }
 

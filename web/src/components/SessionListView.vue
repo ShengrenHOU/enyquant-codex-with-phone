@@ -5,15 +5,23 @@ const props = defineProps({
   groups: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: "" },
   pendingSessionId: { type: String, default: "" },
+  historyPage: {
+    type: Object,
+    default: () => ({
+      hasMore: false,
+      returned: 0,
+      total: 0
+    })
+  },
+  loadingMoreHistory: Boolean,
   formatRelativeTime: { type: Function, required: true }
 });
 
-const emit = defineEmits(["open", "create-group-session"]);
+const emit = defineEmits(["open", "create-group-session", "load-more-history"]);
 const expandedGroups = ref(new Set());
 const openMenuGroupName = ref("");
 const openMenuPoint = ref({ x: 0, y: 0 });
 const longPressTimer = ref(null);
-const longPressGroupName = ref("");
 const suppressToggleUntil = ref(0);
 
 function buildInitialExpandedSet(groups, activeSessionId) {
@@ -82,7 +90,6 @@ function onGroupPointerDown(group, event) {
   const clientY = Number(event?.clientY || 0);
   openMenuPoint.value = { x: clientX, y: clientY };
   clearLongPressTimer();
-  longPressGroupName.value = group.name;
   longPressTimer.value = window.setTimeout(() => {
     openMenuGroupName.value = group.name;
     suppressToggleUntil.value = Date.now() + 260;
@@ -183,6 +190,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </section>
+
     <div
       v-if="openMenuGroupName"
       class="group-action-popover floating"
@@ -197,7 +205,17 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div v-else class="empty-state">还没有可展示的会话。</div>
+    <div v-if="!groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
+
+    <button
+      v-if="groups.length && historyPage?.hasMore"
+      type="button"
+      class="load-more-btn"
+      :disabled="loadingMoreHistory"
+      @click="emit('load-more-history')"
+    >
+      {{ loadingMoreHistory ? "加载中..." : `加载更多旧会话 (${historyPage.returned || 0}/${historyPage.total || 0})` }}
+    </button>
   </main>
 </template>
 
@@ -497,6 +515,23 @@ onBeforeUnmount(() => {
   color: rgba(142, 126, 113, 0.92);
   font-size: 13px;
   text-align: center;
+}
+
+.load-more-btn {
+  width: 100%;
+  border: 1px solid rgba(200, 187, 174, 0.72);
+  border-radius: 16px;
+  background: rgba(255, 250, 246, 0.92);
+  color: rgba(88, 74, 61, 0.94);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 12px 14px;
+  box-shadow: 0 10px 24px rgba(120, 101, 84, 0.05);
+}
+
+.load-more-btn:disabled {
+  opacity: 0.58;
 }
 
 @media (min-width: 700px) {

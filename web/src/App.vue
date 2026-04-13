@@ -5,7 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import ChatView from "./components/ChatView.vue";
 import LoginView from "./components/LoginView.vue";
 import SessionListView from "./components/SessionListView.vue";
-import { request, requestHistoryMessages, requestSessionById } from "./lib/api.js";
+import { request, requestHistoricalSessionsPage, requestHistoryMessages, requestSessionById } from "./lib/api.js";
 import { normalizeServerPayload } from "./lib/normalize-events.js";
 import {
   PREVIEW_FALLBACK,
@@ -58,6 +58,14 @@ const state = reactive({
   rememberToken: true,
   statusText: "",
   sessions: [],
+  historyPage: {
+    limit: 10,
+    offset: 0,
+    returned: 0,
+    total: 0,
+    hasMore: false
+  },
+  loadingMoreHistory: false,
   activeSessionId: "",
   activeLiveSessionId: "",
   activeSessionMeta: null,
@@ -104,6 +112,21 @@ function decorateSession(session) {
     displayPreview: cache.preview || fallbackPreviewForSession(session),
     groupName: workspaceName(session.cwd)
   };
+}
+
+function mergeSessionsById(existingSessions, incomingSessions) {
+  const byId = new Map();
+  for (const session of existingSessions || []) {
+    if (session?.id) {
+      byId.set(session.id, session);
+    }
+  }
+  for (const session of incomingSessions || []) {
+    if (session?.id) {
+      byId.set(session.id, session);
+    }
+  }
+  return [...byId.values()].sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
 }
 
 const groupedSessions = computed(() => {
@@ -608,6 +631,52 @@ async function refreshSessions() {
     };
   }
   state.sessions = sessions;
+  state.historyPage = {
+    limit: Number(payload?.historyPage?.limit || 10),
+    offset: Number(payload?.historyPage?.offset || 0),
+    returned: Number(payload?.historyPage?.returned || 0),
+    total: Number(payload?.historyPage?.total || 0),
+    hasMore: Boolean(payload?.historyPage?.hasMore)
+  };
+}
+
+async function loadMoreHistoricalSessions() {
+  if (state.loadingMoreHistory || !state.historyPage?.hasMore) {
+    return;
+  }
+
+  try {
+    state.loadingMoreHistory = true;
+    const nextOffset = Number(state.historyPage.offset || 0) + Number(state.historyPage.returned || 0);
+    const payload = await requestHistoricalSessionsPage({
+      offset: nextOffset,
+      limit: state.historyPage.limit || 10
+    });
+    const incomingSessions = payload.sessions || [];
+    for (const session of incomingSessions) {
+      const key = cacheKey(session);
+      const title = String(session?.name || "").trim();
+      if (!title) {
+        continue;
+      }
+      sessionCache[key] = {
+        ...(sessionCache[key] || {}),
+        title
+      };
+    }
+    state.sessions = mergeSessionsById(state.sessions, incomingSessions);
+    state.historyPage = {
+      limit: Number(payload?.page?.limit || state.historyPage.limit || 10),
+      offset: Number(payload?.page?.offset || nextOffset),
+      returned: Number(payload?.page?.returned || 0),
+      total: Number(payload?.page?.total || state.historyPage.total || 0),
+      hasMore: Boolean(payload?.page?.hasMore)
+    };
+  } catch (error) {
+    setStatus(error?.message || String(error));
+  } finally {
+    state.loadingMoreHistory = false;
+  }
 }
 
 function toOriginProtocol(proto) {
@@ -1342,9 +1411,12 @@ if (typeof window !== 'undefined') {
           :groups="groupedSessions"
           :active-session-id="state.activeSessionId"
           :pending-session-id="state.pendingSessionId"
+          :history-page="state.historyPage"
+          :loading-more-history="state.loadingMoreHistory"
           :format-relative-time="formatRelativeTime"
           @open="openSessionItem"
           @create-group-session="createSessionInGroup"
+          @load-more-history="loadMoreHistoricalSessions"
         />
 
         <div v-if="state.statusText" class="notice-strip">{{ state.statusText }}</div>
