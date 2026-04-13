@@ -8,7 +8,8 @@ export async function handleHistoryRoute(ctx, runtime) {
       const url = new URL(ctx.url, "http://localhost");
       const provider = String(url.searchParams.get("provider") || "codex");
       const resumeSessionId = String(url.searchParams.get("resumeSessionId") || "");
-      runtime.json(ctx, 200, runtime.sessionManager.getHistoricalMessages(provider, resumeSessionId));
+      const limit = url.searchParams.get("limit");
+      runtime.json(ctx, 200, runtime.sessionManager.getHistoricalMessages(provider, resumeSessionId, { limit }));
     } catch (err) {
       runtime.json(ctx, 400, { error: err?.message || String(err) });
     }
@@ -29,7 +30,9 @@ export async function handleHistoryRoute(ctx, runtime) {
     const provider = String(parts[3] || "codex").trim();
     const resumeSessionId = String(parts[4] || "").trim();
     try {
-      runtime.json(ctx, 200, runtime.sessionManager.getHistoricalMessages(provider, resumeSessionId));
+      const url = new URL(ctx.url, "http://localhost");
+      const limit = url.searchParams.get("limit");
+      runtime.json(ctx, 200, runtime.sessionManager.getHistoricalMessages(provider, resumeSessionId, { limit }));
     } catch (err) {
       runtime.json(ctx, 400, { error: err?.message || String(err) });
     }
