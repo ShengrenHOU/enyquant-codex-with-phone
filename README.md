@@ -4,12 +4,12 @@ English | [简体中文](./README.zh-CN.md)
 
 Use your local `codex` sessions from desktop and phone.
 
-This repo is focused on one workflow:
+This repo is designed for one workflow:
 
 - continue an existing Codex thread from your phone
 - create a new Codex session from your phone
 - browse recent sessions quickly on mobile
-- access your desktop session remotely through Tailscale
+- access the desktop session service remotely through Tailscale
 
 ## Screenshots
 
@@ -24,13 +24,13 @@ This repo is focused on one workflow:
 - `codex` CLI installed and working on the desktop
 - The desktop must already be able to use Codex successfully
   - if your desktop needs a VPN to use Codex in your region, keep that VPN on
-- Tailscale installed on both desktop and phone for remote use
+- Tailscale installed on both desktop and phone for remote access
 
 ## Branch Model
 
 - default branch: `develop`
 - stable branch: `main`
-- new task branches should start from `develop`
+- task branches should start from `develop`
 - PR target branch should be `develop`
 
 ## Quick Start
@@ -40,38 +40,64 @@ git clone -b develop https://github.com/ShengrenHOU/enyquant-codex-with-phone.gi
 cd enyquant-codex-with-phone
 ```
 
-Create `.env` from the example and set at least:
+## Simple Setup Prompt For Codex
+
+If you want Codex to do the local setup for you, copy this block directly into Codex on the desktop:
+
+```text
+Set up this repo for local and phone use on Windows.
+
+Goals:
+1. Check whether Node.js, codex CLI, and Tailscale are available.
+2. Create a local .env from .env.example if missing.
+3. Configure:
+   - HOST=0.0.0.0
+   - TAILSCALE_ONLY=true
+   - ACCESS_TOKEN=<generate a strong local token and show it clearly at the end>
+   - DEFAULT_CWD=<set to my active workspace path>
+   - CODEX_APP_SERVER_ENABLED=true
+4. Run npm install.
+5. Run npm run check.
+6. Start the app in dev mode.
+7. Show me:
+   - local desktop URL
+   - backend URL
+   - Tailscale IP URL for phone
+   - the ACCESS_TOKEN I should use on the phone
+
+Constraints:
+- Do not change repo-tracked source files unless required.
+- If codex on this machine requires VPN to work, tell me to keep the desktop VPN on.
+- If Tailscale is not installed or not logged in, stop and tell me the next action clearly.
+```
+
+## Manual Setup
+
+1. Create `.env` from the example.
+2. Set at least these values:
 
 ```env
 HOST=0.0.0.0
-ACCESS_TOKEN=change-this
+ACCESS_TOKEN=change-this-to-your-own-token
 TAILSCALE_ONLY=true
 DEFAULT_CWD=/your/workspace/path
 CODEX_APP_SERVER_ENABLED=true
 ```
 
-Then install and check:
+3. Install and verify:
 
 ```bash
 npm install
 npm run check
 ```
 
-## Run
-
-Windows:
+4. Start the app:
 
 ```bash
 npm run dev
 ```
 
-macOS / Linux:
-
-```bash
-npm run dev
-```
-
-Open on desktop:
+5. Open on desktop:
 
 - `http://127.0.0.1:5173/#/sessions`
 - or backend direct: `http://127.0.0.1:3210/#/sessions`
@@ -83,8 +109,8 @@ Remote access is provided through Tailscale.
 
 1. Keep the desktop powered on.
 2. Keep Tailscale connected on the desktop.
-3. Keep the Codex desktop environment working.
-   - if your desktop needs a VPN for Codex, keep the VPN connected there
+3. Keep the desktop Codex environment working.
+   - if your desktop needs a VPN for Codex, keep the desktop VPN connected
 4. Keep this service running.
 5. On desktop, run:
 
@@ -101,11 +127,33 @@ http://<desktop-100.x.x.x>:3210/#/sessions
 
 7. Sign in with `ACCESS_TOKEN`.
 
-## Notes About Desktop Codex App
+## Session Sync Limitation With Desktop Codex App
 
-- Phone and desktop can write to the same underlying Codex thread.
-- The Codex desktop app may not hot-refresh when the phone continues a thread.
-- If you continue a session from the phone, reopen that session in the desktop Codex app to see the latest content.
+This needs to be understood clearly.
+
+### What is happening
+
+- the phone web UI and the desktop Codex App can write to the same underlying Codex thread
+- but the desktop Codex App does not guarantee hot-refresh when that thread is updated externally
+
+### Is this a bug
+
+- not necessarily
+- the thread usually **is** updated
+- the desktop app UI just may not refresh live
+
+### What should you do
+
+- if you continue a session from the phone, go back to the desktop Codex App
+- exit that session view
+- reopen the same session
+- then the latest content usually appears
+
+In short:
+
+- phone and desktop share the same underlying thread
+- desktop Codex App may not hot-refresh
+- reopen the session on desktop to see the latest content
 
 ## Windows Compatibility
 
@@ -131,13 +179,13 @@ npm run service:logs
 - confirm phone and desktop are logged into the same Tailscale account
 - confirm desktop Tailscale is online
 - confirm the service is listening on `3210`
-- confirm `TAILSCALE_ONLY=true` is not blocking a non-Tailscale path you are trying to use
+- confirm you are using the Tailscale address, not a normal LAN address
 
 ### Codex replies are slow
 
 - Tailscale is usually not the bottleneck
 - the desktop's own Codex connectivity is usually the main bottleneck
-- in China, if the desktop needs a VPN for Codex, keep that VPN stable
+- in China, if the desktop needs a VPN for Codex, keep that desktop VPN stable
 
 ### Session list is slow on mobile
 
