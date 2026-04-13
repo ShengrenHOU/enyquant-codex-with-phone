@@ -5,7 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import ChatView from "./components/ChatView.vue";
 import LoginView from "./components/LoginView.vue";
 import SessionListView from "./components/SessionListView.vue";
-import { request, requestHistoricalSessionsPage, requestHistoryMessages, requestSessionById } from "./lib/api.js";
+import { request, requestHistoricalSessionsPage, requestHistoryMessages, requestMobileHome, requestSessionById } from "./lib/api.js";
 import { normalizeServerPayload } from "./lib/normalize-events.js";
 import {
   PREVIEW_FALLBACK,
@@ -58,8 +58,10 @@ const state = reactive({
   rememberToken: true,
   statusText: "",
   sessions: [],
+  liveSessions: [],
+  continueSession: null,
   historyPage: {
-    limit: 10,
+    limit: 5,
     offset: 0,
     returned: 0,
     total: 0,
@@ -113,6 +115,8 @@ function decorateSession(session) {
     groupName: workspaceName(session.cwd)
   };
 }
+
+const continueSessionItem = computed(() => (state.continueSession ? decorateSession(state.continueSession) : null));
 
 function mergeSessionsById(existingSessions, incomingSessions) {
   const byId = new Map();
@@ -617,9 +621,11 @@ async function hydrateSession(session, { includeMessages = false, silent = false
 }
 
 async function refreshSessions() {
-  const payload = await request("/api/sessions");
-  const sessions = payload.sessions || [];
-  for (const session of sessions) {
+  const payload = await requestMobileHome({ recentLimit: 5 });
+  const sessions = payload.recentSessions || [];
+  const liveSessions = payload.liveSessions || [];
+  const continueSession = payload.continueSession || null;
+  for (const session of [...liveSessions, continueSession, ...sessions].filter(Boolean)) {
     const key = cacheKey(session);
     const title = String(session?.name || "").trim();
     if (!title) {
@@ -628,11 +634,13 @@ async function refreshSessions() {
     sessionCache[key] = {
       ...(sessionCache[key] || {}),
       title
-    };
+      };
   }
+  state.liveSessions = liveSessions;
+  state.continueSession = continueSession;
   state.sessions = sessions;
   state.historyPage = {
-    limit: Number(payload?.historyPage?.limit || 10),
+    limit: Number(payload?.historyPage?.limit || 5),
     offset: Number(payload?.historyPage?.offset || 0),
     returned: Number(payload?.historyPage?.returned || 0),
     total: Number(payload?.historyPage?.total || 0),
@@ -664,7 +672,7 @@ async function loadMoreHistoricalSessions() {
         title
       };
     }
-    state.sessions = mergeSessionsById(state.sessions, incomingSessions);
+  state.sessions = mergeSessionsById(state.sessions, incomingSessions);
     state.historyPage = {
       limit: Number(payload?.page?.limit || state.historyPage.limit || 10),
       offset: Number(payload?.page?.offset || nextOffset),
@@ -863,11 +871,20 @@ function attachLiveSocket(sessionId, historyMessages = []) {
       if (state.activeSessionId === updated.id) {
         state.activeLiveSessionId = updated.id;
       }
+      const liveIndex = state.liveSessions.findIndex((item) => item.id === updated.id);
+      if (liveIndex >= 0) {
+        const nextLive = [...state.liveSessions];
+        nextLive[liveIndex] = updated;
+        state.liveSessions = nextLive;
+      }
       const index = state.sessions.findIndex((item) => item.id === updated.id);
       if (index >= 0) {
         const next = [...state.sessions];
         next[index] = updated;
         state.sessions = next;
+      }
+      if (state.continueSession?.id === updated.id) {
+        state.continueSession = updated;
       }
       return;
     }
@@ -1108,7 +1125,7 @@ async function ensureLiveSession() {
   const resumeSessionId = String(state.activeSessionMeta.resumeSessionId || "").trim();
   const provider = String(state.activeSessionMeta.provider || "").trim().toLowerCase();
   if (resumeSessionId && provider) {
-    const reusable = state.sessions
+    const reusable = state.liveSessions
       .filter(
         (session) =>
           session.kind === "live" &&
@@ -1231,6 +1248,8 @@ async function backToList() {
   state.activeSessionId = "";
   state.activeLiveSessionId = "";
   state.activeSessionMeta = null;
+  state.liveSessions = [];
+  state.continueSession = null;
   composerDraft.value = "";
   setMessages([]);
   if (route.name !== "sessions") {
@@ -1408,6 +1427,7 @@ if (typeof window !== 'undefined') {
         </header>
 
         <SessionListView
+          :continue-session="continueSessionItem"
           :groups="groupedSessions"
           :active-session-id="state.activeSessionId"
           :pending-session-id="state.pendingSessionId"

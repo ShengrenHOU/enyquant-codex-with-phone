@@ -112,6 +112,30 @@ export async function requestHistoricalSessionsPage({ offset = 0, limit = 10 } =
   return response.json();
 }
 
+export async function requestMobileHome({ recentLimit = 5 } = {}, attempt = 0) {
+  const params = new URLSearchParams({
+    recentLimit: String(recentLimit)
+  });
+
+  const response = await fetch(`/api/mobile-home?${params.toString()}`, {
+    credentials: "same-origin"
+  });
+
+  if (response.status === 401 && attempt === 0) {
+    const relogged = await retryLoginFromSavedToken();
+    if (relogged) {
+      return requestMobileHome({ recentLimit }, attempt + 1);
+    }
+  }
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(payload.error || response.statusText);
+  }
+
+  return response.json();
+}
+
 export async function requestSessionById(sessionId) {
   const id = String(sessionId || "").trim();
   if (!id) {
