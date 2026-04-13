@@ -1,124 +1,199 @@
-# Codex Web Terminal
+# ENYQUANT Codex With Phone
 
 English | [简体中文](./README.zh-CN.md)
 
-One thing only: use local `codex` sessions in your browser (including mobile).
+Use your local `codex` sessions from desktop and phone.
 
-Currently supports **Codex** only.
+This repo is designed for one workflow:
+
+- continue an existing Codex thread from your phone
+- create a new Codex session from your phone
+- browse recent sessions quickly on mobile
+- access the desktop session service remotely through Tailscale
 
 ## Screenshots
 
 <p align="center">
-  <img src="./docs/images/codex-web-terminal.jpg" alt="Codex Web Terminal mobile screenshot 1" width="280" />
-  <img src="./docs/images/codex-web-terminal2.jpg" alt="Codex Web Terminal mobile screenshot 2" width="280" />
+  <img src="./docs/images/codex-web-terminal.jpg" alt="Mobile session list" width="280" />
+  <img src="./docs/images/codex-web-terminal2.jpg" alt="Mobile chat view" width="280" />
 </p>
 
-## Prerequisites
+## Requirements
 
 - Node.js 22+
-- `codex` CLI installed and available in `PATH`
-- For remote/external access: Tailscale installed on both desktop and phone, logged into the same account
+- `codex` CLI installed and working on the desktop
+- The desktop must already be able to use Codex successfully
+  - if your desktop needs a VPN to use Codex in your region, keep that VPN on
+- Tailscale installed on both desktop and phone for remote access
 
-## Quick Start (1 minute)
+## Branch Model
+
+- default branch: `develop`
+- stable branch: `main`
+- task branches should start from `develop`
+- PR target branch should be `develop`
+
+## Quick Start
 
 ```bash
-git clone https://github.com/SZZH/codex-cc-web-terminal.git
-cd codex-cc-web-terminal
-npm run setup
+git clone -b develop https://github.com/ShengrenHOU/enyquant-codex-with-phone.git
+cd enyquant-codex-with-phone
 ```
 
-`npm run setup` guides you through `.env` setup, optional Tailscale setup,
-dependency installation, and service startup.
+## Simple Setup Prompt For Codex
 
-Or run manually (macOS / Linux):
+If you want Codex to do the local setup for you, copy this block directly into Codex on the desktop:
 
-```bash
-cd codex-cc-web-terminal
-cp .env.example .env
-# Set your own ACCESS_TOKEN in .env
-npm install
-npm run dev:up
+```text
+Set up this repo for local and phone use on Windows.
+
+Goals:
+1. Check whether Node.js, codex CLI, and Tailscale are available.
+2. Create a local .env from .env.example if missing.
+3. Configure:
+   - HOST=0.0.0.0
+   - TAILSCALE_ONLY=true
+   - ACCESS_TOKEN=<generate a strong local token and show it clearly at the end>
+   - DEFAULT_CWD=<set to my active workspace path>
+   - CODEX_APP_SERVER_ENABLED=true
+4. Run npm install.
+5. Run npm run check.
+6. Start the app in dev mode.
+7. Show me:
+   - local desktop URL
+   - backend URL
+   - Tailscale IP URL for phone
+   - the ACCESS_TOKEN I should use on the phone
+
+Constraints:
+- Do not change repo-tracked source files unless required.
+- If codex on this machine requires VPN to work, tell me to keep the desktop VPN on.
+- If Tailscale is not installed or not logged in, stop and tell me the next action clearly.
 ```
 
-On Windows (PowerShell or CMD), use:
+## Manual Setup
+
+1. Create `.env` from the example.
+2. Set at least these values:
+
+```env
+HOST=0.0.0.0
+ACCESS_TOKEN=change-this-to-your-own-token
+TAILSCALE_ONLY=true
+DEFAULT_CWD=/your/workspace/path
+CODEX_APP_SERVER_ENABLED=true
+```
+
+3. Install and verify:
 
 ```bash
 npm install
+npm run check
+```
+
+4. Start the app:
+
+```bash
 npm run dev
 ```
 
-Open:
+5. Open on desktop:
 
-- Frontend (recommended): `http://127.0.0.1:5173/#/sessions`
-- Backend direct: `http://127.0.0.1:3210` (or your custom `PORT`)
+- `http://127.0.0.1:5173/#/sessions`
+- or backend direct: `http://127.0.0.1:3210/#/sessions`
 
-## Mobile Access (2 ways)
+## Remote Phone Access
 
-### A. Same Wi-Fi
+This repo does not do public tunneling by itself.
+Remote access is provided through Tailscale.
 
-1. In `.env`, make sure `HOST=0.0.0.0`.
-2. Open on your phone: `http://<your-lan-ip>:3210`
-3. Sign in with `ACCESS_TOKEN`.
-
-### B. Tailscale (recommended for remote network)
-
-Required for this path: Tailscale on both desktop and mobile, signed into the same account.
-
-1. Install and sign in on desktop: [Tailscale](https://tailscale.com/download)
-2. Install Tailscale on Android/iOS and sign in to the same account
-3. On desktop, run:
+1. Keep the desktop powered on.
+2. Keep Tailscale connected on the desktop.
+3. Keep the desktop Codex environment working.
+   - if your desktop needs a VPN for Codex, keep the desktop VPN connected
+4. Keep this service running.
+5. On desktop, run:
 
 ```bash
 tailscale status
 tailscale ip -4
 ```
 
-4. Open on phone: `http://<desktop-100.x.x.x>:3210`
+6. On phone, open:
 
-Recommended `.env` option:
-
-```env
-TAILSCALE_ONLY=true
+```text
+http://<desktop-100.x.x.x>:3210/#/sessions
 ```
 
-## Deployment (PM2)
+7. Sign in with `ACCESS_TOKEN`.
+
+## Session Sync Limitation With Desktop Codex App
+
+This needs to be understood clearly.
+
+### What is happening
+
+- the phone web UI and the desktop Codex App can write to the same underlying Codex thread
+- but the desktop Codex App does not guarantee hot-refresh when that thread is updated externally
+
+### Is this a bug
+
+- not necessarily
+- the thread usually **is** updated
+- the desktop app UI just may not refresh live
+
+### What should you do
+
+- if you continue a session from the phone, go back to the desktop Codex App
+- exit that session view
+- reopen the same session
+- then the latest content usually appears
+
+In short:
+
+- phone and desktop share the same underlying thread
+- desktop Codex App may not hot-refresh
+- reopen the session on desktop to see the latest content
+
+## Windows Compatibility
+
+This repo includes a Windows-specific Codex spawn compatibility fix:
+
+- Codex processes are launched through `cmd.exe /c`
+- this avoids PowerShell shim issues that can cause `spawn EPERM` on Windows
+
+## Common Commands
 
 ```bash
+npm run dev
+npm run check
 npm run service:start
 npm run service:status
 npm run service:logs
 ```
 
-## Common Commands
-
-```bash
-npm run dev            # Cross-platform dev mode (server + web, foreground)
-npm run dev:up         # macOS/Linux: start dev in background
-npm run dev:down       # macOS/Linux: stop background dev processes
-npm run check          # Quick checks
-```
-
 ## Common Issues
 
-1. `Cross-origin request rejected`
-- Start with `npm run dev` (or `npm run dev:up` on macOS/Linux). Do not manually split startup commands.
+### Phone cannot connect
 
-2. `5173` is not reachable
-- Run `npm run dev` first, then check port:
-```bash
-# macOS/Linux
-lsof -iTCP:5173 -sTCP:LISTEN -n -P
+- confirm phone and desktop are logged into the same Tailscale account
+- confirm desktop Tailscale is online
+- confirm the service is listening on `3210`
+- confirm you are using the Tailscale address, not a normal LAN address
 
-# Windows
-netstat -ano | findstr :5173
-```
+### Codex replies are slow
 
-3. Phone says desktop is offline
-- Check service status first: `npm run service:status`
-- Then verify network path: same Wi-Fi or same Tailnet
-- If you changed `PORT`, use the same port in your phone URL.
+- Tailscale is usually not the bottleneck
+- the desktop's own Codex connectivity is usually the main bottleneck
+- in China, if the desktop needs a VPN for Codex, keep that desktop VPN stable
 
-## Open Source
+### Session list is slow on mobile
+
+- this repo now loads recent sessions first
+- older sessions are loaded on demand from the mobile session list
+- history messages default to the latest 3 messages for faster mobile hydration
+
+## License
 
 - [LICENSE](./LICENSE)
 - [CONTRIBUTING.md](./CONTRIBUTING.md)

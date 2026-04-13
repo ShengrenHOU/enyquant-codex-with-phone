@@ -1,121 +1,198 @@
-# Codex Web Terminal
+# ENYQUANT Codex With Phone
 
 [English](./README.md) | 简体中文
 
-只做一件事：把你电脑上的 `codex` 会话放到浏览器（含手机）里用。
+把你电脑上的本地 `codex` 会话延伸到手机上使用。
 
-当前仅支持 **Codex**。
+这个仓库主要解决四件事：
 
-## 示例截图
+- 在手机上继续已有的 Codex 线程
+- 在手机上新建 Codex 会话
+- 在手机上优先浏览最近会话
+- 通过 Tailscale 在外网访问电脑上的会话服务
+
+## 截图
 
 <p align="center">
-  <img src="./docs/images/codex-web-terminal.jpg" alt="Codex Web Terminal 手机界面截图 1" width="280" />
-  <img src="./docs/images/codex-web-terminal2.jpg" alt="Codex Web Terminal 手机界面截图 2" width="280" />
+  <img src="./docs/images/codex-web-terminal.jpg" alt="手机会话列表" width="280" />
+  <img src="./docs/images/codex-web-terminal2.jpg" alt="手机聊天页面" width="280" />
 </p>
 
-## 前置依赖
+## 环境要求
 
 - Node.js 22+
-- 已安装 `codex` 命令并可在终端直接运行
-- 如果要外网访问：电脑和手机都要安装 Tailscale，并登录同一账号
+- 电脑端已经安装并能正常使用 `codex`
+- 电脑端必须先具备正常调用 Codex 的能力
+  - 如果你所在地区需要电脑开 VPN 才能正常使用 Codex，就保持电脑端 VPN 在线
+- 如果要远程外网访问：电脑和手机都安装 Tailscale，并登录同一个账号
 
-## 1 分钟本地跑起来
+## 分支模型
+
+- 默认分支：`develop`
+- 稳定分支：`main`
+- 新任务分支从 `develop` 开出
+- PR 目标分支为 `develop`
+
+## 快速开始
 
 ```bash
-git clone https://github.com/SZZH/codex-cc-web-terminal.git
-cd codex-cc-web-terminal
-npm run setup
+git clone -b develop https://github.com/ShengrenHOU/enyquant-codex-with-phone.git
+cd enyquant-codex-with-phone
 ```
 
-`npm run setup` 会交互式引导你完成：`.env` 配置、可选 Tailscale、安装依赖、启动服务。
+## 傻瓜式安装：直接复制给 Codex
 
-或手动执行（macOS / Linux）：
+如果你希望让 Codex 帮你把本地环境基本配好，直接把下面这段完整贴给电脑上的 Codex：
 
-```bash
-cd codex-cc-web-terminal
-cp .env.example .env
-# 把 .env 里的 ACCESS_TOKEN 改成你自己的
-npm install
-npm run dev:up
+```text
+请帮我把这个仓库配置成电脑和手机都能用的状态。
+
+目标：
+1. 检查这台电脑是否已安装 Node.js、codex CLI、Tailscale。
+2. 如果缺少 .env，就从 .env.example 创建。
+3. 在 .env 里至少配置：
+   - HOST=0.0.0.0
+   - TAILSCALE_ONLY=true
+   - ACCESS_TOKEN=<帮我生成一个本地可用的强 token，并在最后明确展示给我>
+   - DEFAULT_CWD=<设置成我的主工作目录>
+   - CODEX_APP_SERVER_ENABLED=true
+4. 执行 npm install。
+5. 执行 npm run check。
+6. 启动服务。
+7. 最后明确输出：
+   - 电脑本地访问地址
+   - 后端地址
+   - 手机端通过 Tailscale 访问的地址
+   - 手机登录时要输入的 ACCESS_TOKEN
+
+限制：
+- 不要改 repo 里的源码，除非为运行所必需。
+- 如果这台电脑上的 Codex 依赖 VPN，请明确提醒我保持电脑端 VPN 在线。
+- 如果 Tailscale 没装或没登录，请停止并明确告诉我下一步该做什么。
 ```
 
-Windows（PowerShell / CMD）请改用：
+## 手工安装版
+
+1. 基于示例创建 `.env`
+2. 至少配置这些值：
+
+```env
+HOST=0.0.0.0
+ACCESS_TOKEN=换成你自己的 token
+TAILSCALE_ONLY=true
+DEFAULT_CWD=你的工作区路径
+CODEX_APP_SERVER_ENABLED=true
+```
+
+3. 安装依赖并做检查：
 
 ```bash
 npm install
+npm run check
+```
+
+4. 启动服务：
+
+```bash
 npm run dev
 ```
 
-打开：
+5. 电脑本地打开：
 
-- 前端（推荐）：`http://127.0.0.1:5173/#/sessions`
-- 后端直连：`http://127.0.0.1:3210`（如果你改了 `PORT`，这里用对应端口）
+- `http://127.0.0.1:5173/#/sessions`
+- 或后端直连：`http://127.0.0.1:3210/#/sessions`
 
-## 手机访问（两种）
+## 手机远程访问
 
-### A. 同一 Wi-Fi
+这个仓库本身不提供公网穿透。  
+远程访问依赖 Tailscale。
 
-1. `.env` 确认：`HOST=0.0.0.0`
-2. 手机打开：`http://你的电脑局域网IP:3210`
-3. 用 `ACCESS_TOKEN` 登录
-
-### B. Tailscale（外网推荐）
-
-这条路径的前提：电脑和手机都安装 Tailscale，并登录同一账号。
-
-1. 电脑安装并登录 [Tailscale](https://tailscale.com/download)
-2. 安卓/iOS 安装 Tailscale App，并登录同一账号
-3. 电脑执行：
+1. 保持电脑开机
+2. 保持电脑端 Tailscale 在线
+3. 保持电脑端 Codex 可正常使用
+   - 如果你的电脑需要 VPN 才能访问 Codex，就保持电脑端 VPN 在线
+4. 保持本服务正在运行
+5. 在电脑上执行：
 
 ```bash
 tailscale status
 tailscale ip -4
 ```
 
-4. 手机打开：`http://电脑的100.x.x.x:3210`
+6. 手机上打开：
 
-建议 `.env` 打开：
-
-```env
-TAILSCALE_ONLY=true
+```text
+http://<电脑的100.x.x.x>:3210/#/sessions
 ```
 
-## 部署（PM2）
+7. 用 `ACCESS_TOKEN` 登录
+
+## 会话同步限制：为什么手机更新了，桌面 Codex App 没更新
+
+这个问题必须单独讲清楚。
+
+### 发生了什么
+
+- 手机网页和桌面 Codex App 共享同一个底层 Codex thread
+- 但是桌面 Codex App 当前 **不保证** 对外部写入做实时热刷新
+
+### 这是不是 bug
+
+- 不一定是 bug
+- 很多情况下 thread 实际已经写进去了
+- 只是桌面 Codex App 的当前会话页面没有立刻刷新出来
+
+### 正确动作是什么
+
+- 如果你在手机上继续了某个会话
+- 回到电脑上的 Codex App
+- 退出这个会话页面
+- 再重新进入同一个会话
+- 通常就能看到最新记录
+
+一句话总结：
+
+- 手机和桌面共享同一个底层 thread
+- 但桌面 Codex App 不保证热刷新
+- 所以手机继续后，桌面端通常需要重新进入该会话才能看到更新
+
+## Windows 兼容说明
+
+这个仓库已经包含 Windows 下的 Codex 兼容处理：
+
+- 通过 `cmd.exe /c` 拉起 Codex 进程
+- 避免 PowerShell shim 导致的 `spawn EPERM`
+
+## 常用命令
 
 ```bash
+npm run dev
+npm run check
 npm run service:start
 npm run service:status
 npm run service:logs
 ```
 
-## 最常用命令
+## 常见问题
 
-```bash
-npm run dev            # 跨平台开发模式（前后端前台运行）
-npm run dev:up         # 仅 macOS/Linux：后台启动开发服务
-npm run dev:down       # 仅 macOS/Linux：停止后台开发进程
-npm run check          # 快速自检
-```
+### 手机打不开
 
-## 三个高频问题
+- 确认手机和电脑已登录同一个 Tailscale 账号
+- 确认电脑端 Tailscale 在线
+- 确认服务正在监听 `3210`
+- 确认你走的是 Tailscale 地址，而不是普通局域网地址
 
-1. `Cross-origin request rejected`
-- 优先用 `npm run dev`（macOS/Linux 也可用 `npm run dev:up`）启动，不要手动拆开前后端起。
+### Codex 回复慢
 
-2. `5173` 打不开
-- 先执行 `npm run dev`，再看端口：
-```bash
-# macOS/Linux
-lsof -iTCP:5173 -sTCP:LISTEN -n -P
+- 一般不是 Tailscale 本身慢
+- 主要瓶颈通常在电脑端自己的 Codex 网络链路
+- 如果你在中国并且电脑端要依赖 VPN 访问 Codex，请优先保证电脑端 VPN 稳定
 
-# Windows
-netstat -ano | findstr :5173
-```
+### 手机端会话列表慢
 
-3. 手机提示“电脑未连接”
-- 先确认电脑服务在线：`npm run service:status`
-- 再确认网络路径正确：同 Wi-Fi 或同 Tailnet
-- 如果你改过 `PORT`，手机访问地址也要用同一个端口。
+- 现在默认优先加载最近会话
+- 更老的会话按需点击加载
+- 历史消息默认只加载最近 3 条，减少手机端首屏同步负担
 
 ## 开源说明
 
