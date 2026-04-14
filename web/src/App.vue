@@ -212,6 +212,15 @@ const threadMismatch = computed(() => {
   }
   return expectedThreadId.value !== activeThreadId.value;
 });
+const showSharedThreadHint = computed(() => {
+  if (threadMismatch.value) {
+    return true;
+  }
+  if (!expectedThreadId.value || !activeThreadId.value) {
+    return false;
+  }
+  return Boolean(state.activeLiveSessionId) && activeThreadId.value === expectedThreadId.value;
+});
 const canSend = computed(() => Boolean(composerDraft.value.trim()));
 const canInterrupt = computed(() => {
   const socketReady =
@@ -1015,45 +1024,48 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
   state.viewLoading = true;
   setStatus("正在连接会话…");
-  state.activeSessionId = session.id;
-  const decorated = decorateSession(session);
-  state.activeSessionMeta = decorated;
-  bumpActiveSessionOpenToken();
-  if (!skipRoute && route.name !== "chat") {
-    await router.push({ name: "chat", params: { sessionId: session.id } });
-  }
-  composerDraft.value = "";
-  state.replayGuardActive = false;
-  state.replayGuardPrompt = "";
-  state.replayGuardUntil = 0;
-  // Refresh auth/config before WebSocket connect to avoid stale cookie + fresh process mismatch.
-  await bootstrapWorkspace({ includeSessions: false });
-  let historyMessages = [];
-  if (session.resumeSessionId) {
-    const hydrated = await hydrateSession(
-      {
-        ...session,
-        id: `history:${session.provider}:${session.resumeSessionId}`,
-        kind: "history",
-        status: "saved"
-      },
-      { includeMessages: true, silent: true }
-    );
-    historyMessages = hydrated?.messages || [];
-    if (hydrated?.session) {
-      state.activeSessionMeta = {
-        ...state.activeSessionMeta,
-        displayTitle: hydrated.title || state.activeSessionMeta.displayTitle,
-        displayPreview: hydrated.preview || state.activeSessionMeta.displayPreview,
-        cwd: hydrated.session.cwd || state.activeSessionMeta.cwd || ""
-      };
+  try {
+    state.activeSessionId = session.id;
+    const decorated = decorateSession(session);
+    state.activeSessionMeta = decorated;
+    bumpActiveSessionOpenToken();
+    if (!skipRoute && route.name !== "chat") {
+      await router.push({ name: "chat", params: { sessionId: session.id } });
     }
+    composerDraft.value = "";
+    state.replayGuardActive = false;
+    state.replayGuardPrompt = "";
+    state.replayGuardUntil = 0;
+    // Refresh auth/config before WebSocket connect to avoid stale cookie + fresh process mismatch.
+    await bootstrapWorkspace({ includeSessions: false });
+    let historyMessages = [];
+    if (session.resumeSessionId) {
+      const hydrated = await hydrateSession(
+        {
+          ...session,
+          id: `history:${session.provider}:${session.resumeSessionId}`,
+          kind: "history",
+          status: "saved"
+        },
+        { includeMessages: true, silent: true }
+      );
+      historyMessages = hydrated?.messages || [];
+      if (hydrated?.session) {
+        state.activeSessionMeta = {
+          ...state.activeSessionMeta,
+          displayTitle: hydrated.title || state.activeSessionMeta.displayTitle,
+          displayPreview: hydrated.preview || state.activeSessionMeta.displayPreview,
+          cwd: hydrated.session.cwd || state.activeSessionMeta.cwd || ""
+        };
+      }
+    }
+    setMessages(historyMessages);
+    await attachLiveSocket(session.id, historyMessages);
+    setStatus("");
+  } finally {
+    state.pendingSessionId = "";
+    state.viewLoading = false;
   }
-  setMessages(historyMessages);
-  await attachLiveSocket(session.id, historyMessages);
-  setStatus("");
-  state.pendingSessionId = "";
-  state.viewLoading = false;
 }
 
 async function openHistoricalSession(session, { skipRoute = false } = {}) {
@@ -1062,30 +1074,33 @@ async function openHistoricalSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
   state.viewLoading = true;
   setStatus("正在加载会话…");
-  const decorated = decorateSession(session);
-  const hydrated = await hydrateSession(session, { includeMessages: true });
-  const historyMessages = hydrated?.messages || [];
+  try {
+    const decorated = decorateSession(session);
+    const hydrated = await hydrateSession(session, { includeMessages: true });
+    const historyMessages = hydrated?.messages || [];
 
-  state.activeSessionId = session.id;
-  state.activeSessionMeta = {
-    ...decorated,
-    cwd: hydrated?.session?.cwd || decorated.cwd || "",
-    displayTitle: hydrated?.title || decorated.displayTitle,
-    displayPreview: hydrated?.preview || decorated.displayPreview
-  };
-  bumpActiveSessionOpenToken();
-  if (!skipRoute && route.name !== "chat") {
-    await router.push({ name: "chat", params: { sessionId: session.id } });
+    state.activeSessionId = session.id;
+    state.activeSessionMeta = {
+      ...decorated,
+      cwd: hydrated?.session?.cwd || decorated.cwd || "",
+      displayTitle: hydrated?.title || decorated.displayTitle,
+      displayPreview: hydrated?.preview || decorated.displayPreview
+    };
+    bumpActiveSessionOpenToken();
+    if (!skipRoute && route.name !== "chat") {
+      await router.push({ name: "chat", params: { sessionId: session.id } });
+    }
+    composerDraft.value = "";
+    state.replayGuardActive = false;
+    state.replayGuardPrompt = "";
+    state.replayGuardUntil = 0;
+    setMessages(historyMessages);
+    state.activeLiveSessionId = "";
+    setStatus("");
+  } finally {
+    state.pendingSessionId = "";
+    state.viewLoading = false;
   }
-  composerDraft.value = "";
-  state.replayGuardActive = false;
-  state.replayGuardPrompt = "";
-  state.replayGuardUntil = 0;
-  setMessages(historyMessages);
-  state.activeLiveSessionId = "";
-  setStatus("");
-  state.pendingSessionId = "";
-  state.viewLoading = false;
 }
 
 async function openSessionItem(session, { skipRoute = false } = {}) {
@@ -1424,6 +1439,11 @@ watch(
         },
         { skipRoute: true }
       );
+    } catch (error) {
+      state.pendingSessionId = "";
+      state.viewLoading = false;
+      setStatus(error?.message || String(error));
+      await router.replace({ name: "sessions" });
     } finally {
       syncingRouteOpen = false;
     }
@@ -1566,6 +1586,7 @@ if (typeof window !== 'undefined') {
         :title="activeSessionTitle"
         :thread-id="activeThreadId"
         :expected-thread-id="expectedThreadId"
+        :show-shared-thread-hint="showSharedThreadHint"
         :thread-mismatch="threadMismatch"
         :workspace-name="activeWorkspaceName"
         :assistant-name="activeAssistantName"

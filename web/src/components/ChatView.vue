@@ -12,6 +12,7 @@ const props = defineProps({
   title: { type: String, default: "会话" },
   threadId: { type: String, default: "" },
   expectedThreadId: { type: String, default: "" },
+  showSharedThreadHint: { type: Boolean, default: false },
   threadMismatch: { type: Boolean, default: false },
   workspaceName: { type: String, default: "" },
   assistantName: { type: String, default: "Codex" },
@@ -194,7 +195,6 @@ const renderedMessages = computed(() =>
 
 const hasAnyProcessDetails = computed(() => renderedMessages.value.some((message) => message.hasProcessDetails));
 const visibleThreadId = computed(() => String(props.threadId || props.expectedThreadId || "").trim());
-const showSharedThreadHint = computed(() => Boolean(props.expectedThreadId || props.threadMismatch));
 const threadHint = computed(() => {
   if (!visibleThreadId.value) {
     return "thread_id: 暂未获取";
