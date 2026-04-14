@@ -54,12 +54,17 @@ const state = reactive({
   ready: false,
   isAuthenticated: false,
   loading: false,
+  homeLoading: false,
+  viewLoading: false,
   accessToken: "",
   rememberToken: true,
   statusText: "",
   sessions: [],
   liveSessions: [],
   continueSession: null,
+  defaultCreateCwd: "",
+  createModalOpen: false,
+  createDraftName: "",
   historyPage: {
     limit: 5,
     offset: 0,
@@ -131,6 +136,8 @@ function decorateSession(session) {
 }
 
 const continueSessionItem = computed(() => (state.continueSession ? decorateSession(state.continueSession) : null));
+const defaultCreateWorkspaceName = computed(() => workspaceName(state.defaultCreateCwd || ""));
+const canSubmitCreate = computed(() => state.pendingSessionId !== "__creating__");
 
 function mergeSessionsById(existingSessions, incomingSessions) {
   const byId = new Map();
@@ -635,31 +642,37 @@ async function hydrateSession(session, { includeMessages = false, silent = false
 }
 
 async function refreshSessions() {
-  const payload = await requestMobileHome({ recentLimit: 5 });
-  const sessions = payload.recentSessions || [];
-  const liveSessions = payload.liveSessions || [];
-  const continueSession = payload.continueSession || null;
-  for (const session of [...liveSessions, continueSession, ...sessions].filter(Boolean)) {
-    const key = cacheKey(session);
-    const title = String(session?.name || "").trim();
-    if (!title) {
-      continue;
-    }
-    sessionCache[key] = {
-      ...(sessionCache[key] || {}),
-      title
+  state.homeLoading = true;
+  try {
+    const payload = await requestMobileHome({ recentLimit: 5 });
+    const sessions = payload.recentSessions || [];
+    const liveSessions = payload.liveSessions || [];
+    const continueSession = payload.continueSession || null;
+    for (const session of [...liveSessions, continueSession, ...sessions].filter(Boolean)) {
+      const key = cacheKey(session);
+      const title = String(session?.name || "").trim();
+      if (!title) {
+        continue;
+      }
+      sessionCache[key] = {
+        ...(sessionCache[key] || {}),
+        title
       };
+    }
+    state.liveSessions = liveSessions;
+    state.continueSession = continueSession;
+    state.defaultCreateCwd = String(payload?.defaultCreateCwd || continueSession?.cwd || sessions[0]?.cwd || "").trim();
+    state.sessions = sessions;
+    state.historyPage = {
+      limit: Number(payload?.historyPage?.limit || 5),
+      offset: Number(payload?.historyPage?.offset || 0),
+      returned: Number(payload?.historyPage?.returned || 0),
+      total: Number(payload?.historyPage?.total || 0),
+      hasMore: Boolean(payload?.historyPage?.hasMore)
+    };
+  } finally {
+    state.homeLoading = false;
   }
-  state.liveSessions = liveSessions;
-  state.continueSession = continueSession;
-  state.sessions = sessions;
-  state.historyPage = {
-    limit: Number(payload?.historyPage?.limit || 5),
-    offset: Number(payload?.historyPage?.offset || 0),
-    returned: Number(payload?.historyPage?.returned || 0),
-    total: Number(payload?.historyPage?.total || 0),
-    hasMore: Boolean(payload?.historyPage?.hasMore)
-  };
 }
 
 async function loadMoreHistoricalSessions() {
@@ -699,6 +712,19 @@ async function loadMoreHistoricalSessions() {
   } finally {
     state.loadingMoreHistory = false;
   }
+}
+
+function openCreateModal() {
+  state.createDraftName = "";
+  state.createModalOpen = true;
+}
+
+function closeCreateModal() {
+  if (state.pendingSessionId === "__creating__") {
+    return;
+  }
+  state.createModalOpen = false;
+  state.createDraftName = "";
 }
 
 function toOriginProtocol(proto) {
@@ -984,6 +1010,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
 
 async function openLiveSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
+  state.viewLoading = true;
   setStatus("正在连接会话…");
   state.activeSessionId = session.id;
   const decorated = decorateSession(session);
@@ -1023,12 +1050,14 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
   await attachLiveSocket(session.id, historyMessages);
   setStatus("");
   state.pendingSessionId = "";
+  state.viewLoading = false;
 }
 
 async function openHistoricalSession(session, { skipRoute = false } = {}) {
   closeSocket();
   finalizeAssistantStream();
   state.pendingSessionId = session.id;
+  state.viewLoading = true;
   setStatus("正在加载会话…");
   const decorated = decorateSession(session);
   const hydrated = await hydrateSession(session, { includeMessages: true });
@@ -1053,6 +1082,7 @@ async function openHistoricalSession(session, { skipRoute = false } = {}) {
   state.activeLiveSessionId = "";
   setStatus("");
   state.pendingSessionId = "";
+  state.viewLoading = false;
 }
 
 async function openSessionItem(session, { skipRoute = false } = {}) {
@@ -1072,6 +1102,7 @@ async function openSessionItem(session, { skipRoute = false } = {}) {
     }
     await openLiveSession(session, { skipRoute });
   } catch (error) {
+    state.viewLoading = false;
     if (session.kind === "live" && session.resumeSessionId) {
       try {
         await openHistoricalSession({
@@ -1124,10 +1155,12 @@ async function createSessionInGroup(group) {
 }
 
 async function createQuickSession() {
-  const fallbackCwd =
-    String(continueSessionItem.value?.cwd || "").trim() ||
-    String(groupedSessions.value[0]?.cwd || "").trim() ||
-    "";
+  openCreateModal();
+}
+
+async function submitCreateSession() {
+  const fallbackCwd = String(state.defaultCreateCwd || "").trim();
+  const draftName = String(state.createDraftName || "").trim();
 
   try {
     state.pendingSessionId = "__creating__";
@@ -1136,11 +1169,13 @@ async function createQuickSession() {
       method: "POST",
       body: JSON.stringify({
         provider: "codex",
-        cwd: fallbackCwd
+        cwd: fallbackCwd,
+        name: draftName
       })
     });
     await refreshSessions();
     if (payload?.session) {
+      closeCreateModal();
       await openSessionItem(payload.session);
       return;
     }
@@ -1295,6 +1330,9 @@ async function backToList() {
   state.activeSessionMeta = null;
   state.liveSessions = [];
   state.continueSession = null;
+  state.defaultCreateCwd = "";
+  state.createModalOpen = false;
+  state.createDraftName = "";
   composerDraft.value = "";
   setMessages([]);
   if (route.name !== "sessions") {
@@ -1477,13 +1515,39 @@ if (typeof window !== 'undefined') {
           :active-session-id="state.activeSessionId"
           :pending-session-id="state.pendingSessionId"
           :history-page="state.historyPage"
+          :home-loading="state.homeLoading"
           :loading-more-history="state.loadingMoreHistory"
+          :default-create-workspace-name="defaultCreateWorkspaceName"
           :format-relative-time="formatRelativeTime"
           @open="openSessionItem"
           @create-group-session="createSessionInGroup"
           @create-quick-session="createQuickSession"
           @load-more-history="loadMoreHistoricalSessions"
         />
+
+        <div v-if="state.createModalOpen" class="create-modal-backdrop" @click="closeCreateModal">
+          <section class="create-modal-card" @click.stop>
+            <p class="create-modal-kicker">新建会话</p>
+            <h2 class="create-modal-title">为这个会话起个名字</h2>
+            <p class="create-modal-subtitle">当前默认创建到：{{ defaultCreateWorkspaceName }}</p>
+            <input
+              v-model="state.createDraftName"
+              class="create-modal-input"
+              type="text"
+              placeholder="例如：欧洲论坛页面优化"
+              :disabled="!canSubmitCreate"
+              @keydown.enter.prevent="submitCreateSession"
+            />
+            <div class="create-modal-actions">
+              <button type="button" class="create-modal-btn secondary" :disabled="!canSubmitCreate" @click="closeCreateModal">
+                取消
+              </button>
+              <button type="button" class="create-modal-btn primary" :disabled="!canSubmitCreate" @click="submitCreateSession">
+                {{ state.pendingSessionId === "__creating__" ? "创建中..." : "创建并进入" }}
+              </button>
+            </div>
+          </section>
+        </div>
 
         <div v-if="state.statusText" class="notice-strip">{{ state.statusText }}</div>
       </section>
@@ -1503,6 +1567,7 @@ if (typeof window !== 'undefined') {
         :can-send="canSend"
         :can-interrupt="canInterrupt"
         :loading="state.loading"
+        :view-loading="state.viewLoading"
         :status-text="state.statusText"
         @back="backToList"
         @interrupt="interruptActiveSession"

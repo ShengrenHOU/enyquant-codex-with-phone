@@ -20,6 +20,7 @@ const props = defineProps({
   canSend: Boolean,
   canInterrupt: Boolean,
   loading: Boolean,
+  viewLoading: Boolean,
   statusText: { type: String, default: "" }
 });
 
@@ -193,6 +194,7 @@ const renderedMessages = computed(() =>
 
 const hasAnyProcessDetails = computed(() => renderedMessages.value.some((message) => message.hasProcessDetails));
 const visibleThreadId = computed(() => String(props.threadId || props.expectedThreadId || "").trim());
+const showSharedThreadHint = computed(() => Boolean(props.expectedThreadId || props.threadMismatch));
 const threadHint = computed(() => {
   if (!visibleThreadId.value) {
     return "thread_id: 暂未获取";
@@ -381,6 +383,16 @@ onBeforeUnmount(() => {
 
     <main class="chat-screen">
       <section ref="messageListEl" class="message-stream" @scroll="handleStreamScroll">
+        <div v-if="showSharedThreadHint" class="thread-hint">
+          已写入共享 thread。若桌面 Codex App 没刷新，重新进入该会话即可看到更新。
+        </div>
+
+        <div v-if="viewLoading && !renderedMessages.length" class="chat-skeleton">
+          <div class="chat-skeleton-row large"></div>
+          <div class="chat-skeleton-row"></div>
+          <div class="chat-skeleton-row short"></div>
+        </div>
+
         <article v-for="message in renderedMessages" :key="message.id" class="message-item" :class="message.role">
           <div v-if="message.renderKind === 'image'" class="message-bubble image-bubble">
             <img class="message-image" :src="message.imageUrl" :alt="message.imageAlt" loading="lazy" decoding="async" />
@@ -407,7 +419,7 @@ onBeforeUnmount(() => {
         {{ showProcessDetails ? "隐藏过程详情" : "显示过程详情" }}
       </button>
 
-      <p v-if="statusText" class="chat-status">{{ statusText }}</p>
+      <p v-if="statusText" class="chat-status highlighted">{{ statusText }}</p>
 
       <form class="composer" @submit.prevent="emit('submit')">
         <textarea
@@ -767,6 +779,56 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.45;
   color: #99897c;
+}
+
+.chat-status.highlighted {
+  margin: 0 14px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(208, 197, 187, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 250, 245, 0.92);
+  color: #7f6b5a;
+}
+
+.thread-hint {
+  align-self: center;
+  max-width: min(100%, 44rem);
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 250, 245, 0.95);
+  border: 1px solid rgba(211, 200, 190, 0.8);
+  color: #8a7768;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.chat-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-skeleton-row {
+  height: 54px;
+  max-width: min(86%, 30rem);
+  border-radius: 18px;
+  background: linear-gradient(90deg, rgba(239, 232, 225, 0.9), rgba(248, 243, 238, 0.96), rgba(239, 232, 225, 0.9));
+  background-size: 220% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+.chat-skeleton-row.large {
+  height: 88px;
+}
+
+.chat-skeleton-row.short {
+  max-width: min(58%, 18rem);
+}
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .process-toggle {
