@@ -1467,10 +1467,15 @@ export class SessionManager {
         .filter((session) => session?.kind === "history")
         .map((session) => session.id)
     );
+    const defaultCreateCwd =
+      String(continueSession?.cwd || "").trim() ||
+      String(recentSessions[0]?.cwd || "").trim() ||
+      String(this.config.defaultCwd || "").trim();
     return {
       liveSessions,
       continueSession,
       recentSessions,
+      defaultCreateCwd,
       historyPage: {
         limit: normalizeSessionLimit(recentLimit, 5),
         offset: 0,

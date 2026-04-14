@@ -14,7 +14,9 @@ const props = defineProps({
       total: 0
     })
   },
+  homeLoading: Boolean,
   loadingMoreHistory: Boolean,
+  defaultCreateWorkspaceName: { type: String, default: "" },
   formatRelativeTime: { type: Function, required: true }
 });
 
@@ -162,30 +164,41 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="session-screen">
+    <section class="workspace-banner">
+      <div class="workspace-copy">
+        <p class="workspace-kicker">默认新会话</p>
+        <p class="workspace-name">{{ defaultCreateWorkspaceName || "当前工作区" }}</p>
+      </div>
+      <button
+        type="button"
+        class="workspace-action"
+        :disabled="pendingSessionId === '__creating__'"
+        @click="emit('create-quick-session')"
+      >
+        {{ pendingSessionId === "__creating__" ? "创建中..." : "新会话" }}
+      </button>
+    </section>
+
     <section v-if="continueSession" class="continue-card">
       <div class="continue-copy">
         <p class="continue-kicker">继续最近会话</p>
         <h2 class="continue-title">{{ continueSession.displayTitle }}</h2>
         <p class="continue-subtitle">{{ continueSubtitle(continueSession) }}</p>
       </div>
-      <div class="continue-actions">
-        <button
-          type="button"
-          class="continue-btn secondary"
-          :disabled="pendingSessionId === '__creating__'"
-          @click="emit('create-quick-session')"
-        >
-          新会话
-        </button>
-        <button
-          type="button"
-          class="continue-btn"
-          :class="{ pending: continueSession.id === pendingSessionId, active: continueSession.id === activeSessionId }"
-          @click="emit('open', continueSession)"
-        >
-          继续
-        </button>
-      </div>
+      <button
+        type="button"
+        class="continue-btn"
+        :class="{ pending: continueSession.id === pendingSessionId, active: continueSession.id === activeSessionId }"
+        @click="emit('open', continueSession)"
+      >
+        继续
+      </button>
+    </section>
+
+    <section v-if="homeLoading && !continueSession && !groups.length" class="home-skeleton">
+      <div class="skeleton-card large"></div>
+      <div class="skeleton-card"></div>
+      <div class="skeleton-card short"></div>
     </section>
 
     <section v-if="groups.length" class="session-groups">
@@ -239,21 +252,11 @@ onBeforeUnmount(() => {
         class="group-action-btn"
         @click.stop="createGroupSession(groups.find((item) => item.name === openMenuGroupName))"
       >
-        新增会话
+        在该工作区新建
       </button>
     </div>
 
-    <button
-      v-if="!continueSession"
-      type="button"
-      class="quick-create-btn"
-      :disabled="pendingSessionId === '__creating__'"
-      @click="emit('create-quick-session')"
-    >
-      {{ pendingSessionId === '__creating__' ? '创建中...' : '新增会话' }}
-    </button>
-
-    <div v-if="!continueSession && !groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
+    <div v-if="!homeLoading && !continueSession && !groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
 
     <button
       v-if="(continueSession || groups.length) && historyPage?.hasMore"
@@ -274,6 +277,57 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-width: 0;
   padding: 12px 12px 18px;
+}
+
+.workspace-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(205, 194, 183, 0.75);
+  border-radius: 18px;
+  background: rgba(255, 252, 248, 0.88);
+  box-shadow: 0 8px 18px rgba(120, 101, 84, 0.04);
+}
+
+.workspace-copy {
+  min-width: 0;
+}
+
+.workspace-kicker {
+  margin: 0 0 4px;
+  color: rgba(142, 118, 95, 0.92);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.workspace-name {
+  margin: 0;
+  color: rgba(69, 58, 48, 0.96);
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.workspace-action {
+  flex: 0 0 auto;
+  min-width: 82px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #c2b09d 0%, #ae9a85 100%);
+  color: #fffdfa;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 11px 14px;
+  box-shadow: 0 10px 20px rgba(139, 117, 97, 0.12);
+}
+
+.workspace-action:disabled {
+  opacity: 0.55;
 }
 
 .continue-card {
@@ -331,25 +385,34 @@ onBeforeUnmount(() => {
   box-shadow: 0 12px 24px rgba(139, 117, 97, 0.16);
 }
 
-.continue-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.continue-btn.secondary {
-  background: rgba(255, 252, 248, 0.9);
-  border: 1px solid rgba(191, 177, 162, 0.78);
-  color: rgba(88, 74, 61, 0.94);
-  box-shadow: none;
-}
-
 .continue-btn.pending {
   opacity: 0.7;
 }
 
 .continue-btn.active {
   background: linear-gradient(180deg, #9f866d 0%, #8d745c 100%);
+}
+
+.home-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-card {
+  height: 84px;
+  border-radius: 18px;
+  background: linear-gradient(90deg, rgba(239, 232, 225, 0.9), rgba(248, 243, 238, 0.96), rgba(239, 232, 225, 0.9));
+  background-size: 220% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+.skeleton-card.large {
+  height: 108px;
+}
+
+.skeleton-card.short {
+  width: 72%;
 }
 
 .session-groups {
@@ -658,21 +721,9 @@ onBeforeUnmount(() => {
   opacity: 0.58;
 }
 
-.quick-create-btn {
-  width: 100%;
-  border: 1px solid rgba(191, 177, 162, 0.72);
-  border-radius: 16px;
-  background: rgba(255, 250, 246, 0.92);
-  color: rgba(88, 74, 61, 0.94);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
-  padding: 12px 14px;
-  box-shadow: 0 10px 24px rgba(120, 101, 84, 0.05);
-}
-
- .quick-create-btn:disabled {
-  opacity: 0.58;
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 @media (min-width: 700px) {
