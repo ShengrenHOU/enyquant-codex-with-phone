@@ -18,7 +18,7 @@ const props = defineProps({
   formatRelativeTime: { type: Function, required: true }
 });
 
-const emit = defineEmits(["open", "create-group-session", "load-more-history"]);
+const emit = defineEmits(["open", "create-group-session", "create-quick-session", "load-more-history"]);
 const expandedGroups = ref(new Set());
 const openMenuGroupName = ref("");
 const openMenuPoint = ref({ x: 0, y: 0 });
@@ -168,14 +168,24 @@ onBeforeUnmount(() => {
         <h2 class="continue-title">{{ continueSession.displayTitle }}</h2>
         <p class="continue-subtitle">{{ continueSubtitle(continueSession) }}</p>
       </div>
-      <button
-        type="button"
-        class="continue-btn"
-        :class="{ pending: continueSession.id === pendingSessionId, active: continueSession.id === activeSessionId }"
-        @click="emit('open', continueSession)"
-      >
-        继续
-      </button>
+      <div class="continue-actions">
+        <button
+          type="button"
+          class="continue-btn secondary"
+          :disabled="pendingSessionId === '__creating__'"
+          @click="emit('create-quick-session')"
+        >
+          新会话
+        </button>
+        <button
+          type="button"
+          class="continue-btn"
+          :class="{ pending: continueSession.id === pendingSessionId, active: continueSession.id === activeSessionId }"
+          @click="emit('open', continueSession)"
+        >
+          继续
+        </button>
+      </div>
     </section>
 
     <section v-if="groups.length" class="session-groups">
@@ -232,6 +242,16 @@ onBeforeUnmount(() => {
         新增会话
       </button>
     </div>
+
+    <button
+      v-if="!continueSession"
+      type="button"
+      class="quick-create-btn"
+      :disabled="pendingSessionId === '__creating__'"
+      @click="emit('create-quick-session')"
+    >
+      {{ pendingSessionId === '__creating__' ? '创建中...' : '新增会话' }}
+    </button>
 
     <div v-if="!continueSession && !groups.length && !openMenuGroupName" class="empty-state">还没有可展示的会话。</div>
 
@@ -309,6 +329,19 @@ onBeforeUnmount(() => {
   line-height: 1.2;
   padding: 13px 16px;
   box-shadow: 0 12px 24px rgba(139, 117, 97, 0.16);
+}
+
+.continue-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.continue-btn.secondary {
+  background: rgba(255, 252, 248, 0.9);
+  border: 1px solid rgba(191, 177, 162, 0.78);
+  color: rgba(88, 74, 61, 0.94);
+  box-shadow: none;
 }
 
 .continue-btn.pending {
@@ -622,6 +655,23 @@ onBeforeUnmount(() => {
 }
 
 .load-more-btn:disabled {
+  opacity: 0.58;
+}
+
+.quick-create-btn {
+  width: 100%;
+  border: 1px solid rgba(191, 177, 162, 0.72);
+  border-radius: 16px;
+  background: rgba(255, 250, 246, 0.92);
+  color: rgba(88, 74, 61, 0.94);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 12px 14px;
+  box-shadow: 0 10px 24px rgba(120, 101, 84, 0.05);
+}
+
+ .quick-create-btn:disabled {
   opacity: 0.58;
 }
 
