@@ -1434,6 +1434,12 @@ export class SessionManager {
 
   listMobileHome({ recentLimit = 5 } = {}) {
     const liveSessions = this.listLiveSessions();
+    const isLowSignalAutoNamedLiveSession = (session) =>
+      session?.kind === "live" &&
+      session.autoNamed &&
+      !String(session.resumeSessionId || "").trim() &&
+      !String(session.inputPreview || "").trim();
+    const surfacedLiveSessions = liveSessions.filter((session) => !isLowSignalAutoNamedLiveSession(session));
     const liveByResumeId = new Set(
       liveSessions
         .map((session) => this.resumeKey(session.provider, session.resumeSessionId))
@@ -1442,25 +1448,15 @@ export class SessionManager {
     const historySessions = this.listHistoricalSessions({ archived: false }).filter((session) => {
       return !liveByResumeId.has(this.resumeKey(session.provider, session.resumeSessionId));
     });
-    const combined = [...liveSessions, ...historySessions].sort((a, b) =>
+    const combined = [...surfacedLiveSessions, ...historySessions].sort((a, b) =>
       String(b.updatedAt).localeCompare(String(a.updatedAt))
     );
     const continueSession =
-      liveSessions[0] ||
+      surfacedLiveSessions[0] ||
       historySessions[0] ||
       null;
     const recentSessions = combined
       .filter((session) => !continueSession || session.id !== continueSession.id)
-      .filter((session) => {
-        if (session.kind !== "live") {
-          return true;
-        }
-        return !(
-          session.autoNamed &&
-          !String(session.resumeSessionId || "").trim() &&
-          !String(session.inputPreview || "").trim()
-        );
-      })
       .slice(0, Math.max(0, normalizeSessionLimit(recentLimit, 5)));
     const surfacedHistoryIds = new Set(
       [continueSession, ...recentSessions]
