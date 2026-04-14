@@ -108,9 +108,23 @@ function parseHistoryRouteSessionId(value) {
 
 function decorateSession(session) {
   const cache = sessionCache[cacheKey(session)] || {};
+  const cachedTitle = String(cache.title || "").trim();
+  const rawName = String(session?.name || "").trim();
+  let displayTitle = cachedTitle;
+
+  if (!displayTitle) {
+    if (session?.autoNamed && !String(session?.inputPreview || "").trim()) {
+      displayTitle = session?.resumeSessionId ? fallbackTitleForSession({ ...session, name: "" }) : "新会话";
+    } else if (rawName) {
+      displayTitle = rawName;
+    } else {
+      displayTitle = fallbackTitleForSession(session);
+    }
+  }
+
   return {
     ...session,
-    displayTitle: cache.title || String(session?.name || "").trim() || fallbackTitleForSession(session),
+    displayTitle,
     displayPreview: cache.preview || fallbackPreviewForSession(session),
     groupName: workspaceName(session.cwd)
   };
@@ -1109,6 +1123,37 @@ async function createSessionInGroup(group) {
   }
 }
 
+async function createQuickSession() {
+  const fallbackCwd =
+    String(continueSessionItem.value?.cwd || "").trim() ||
+    String(groupedSessions.value[0]?.cwd || "").trim() ||
+    "";
+
+  try {
+    state.pendingSessionId = "__creating__";
+    setStatus("正在创建会话…");
+    const payload = await request("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: "codex",
+        cwd: fallbackCwd
+      })
+    });
+    await refreshSessions();
+    if (payload?.session) {
+      await openSessionItem(payload.session);
+      return;
+    }
+    setStatus("会话已创建，请手动打开。");
+  } catch (error) {
+    setStatus(error?.message || String(error));
+  } finally {
+    if (state.pendingSessionId === "__creating__") {
+      state.pendingSessionId = "";
+    }
+  }
+}
+
 async function ensureLiveSession() {
   if (state.activeLiveSessionId && state.activeSocket && state.activeSocket.readyState === WebSocket.OPEN) {
     return state.activeLiveSessionId;
@@ -1436,6 +1481,7 @@ if (typeof window !== 'undefined') {
           :format-relative-time="formatRelativeTime"
           @open="openSessionItem"
           @create-group-session="createSessionInGroup"
+          @create-quick-session="createQuickSession"
           @load-more-history="loadMoreHistoricalSessions"
         />
 

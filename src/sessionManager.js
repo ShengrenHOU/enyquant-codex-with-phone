@@ -1451,6 +1451,16 @@ export class SessionManager {
       null;
     const recentSessions = combined
       .filter((session) => !continueSession || session.id !== continueSession.id)
+      .filter((session) => {
+        if (session.kind !== "live") {
+          return true;
+        }
+        return !(
+          session.autoNamed &&
+          !String(session.resumeSessionId || "").trim() &&
+          !String(session.inputPreview || "").trim()
+        );
+      })
       .slice(0, Math.max(0, normalizeSessionLimit(recentLimit, 5)));
     const surfacedHistoryIds = new Set(
       [continueSession, ...recentSessions]
