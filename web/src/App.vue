@@ -63,6 +63,7 @@ const state = reactive({
   liveSessions: [],
   continueSession: null,
   defaultCreateCwd: "",
+  createTargetCwd: "",
   createModalOpen: false,
   createDraftName: "",
   historyPage: {
@@ -136,7 +137,7 @@ function decorateSession(session) {
 }
 
 const continueSessionItem = computed(() => (state.continueSession ? decorateSession(state.continueSession) : null));
-const defaultCreateWorkspaceName = computed(() => workspaceName(state.defaultCreateCwd || ""));
+const defaultCreateWorkspaceName = computed(() => workspaceName(state.createTargetCwd || state.defaultCreateCwd || ""));
 const canSubmitCreate = computed(() => state.pendingSessionId !== "__creating__");
 
 function mergeSessionsById(existingSessions, incomingSessions) {
@@ -714,8 +715,9 @@ async function loadMoreHistoricalSessions() {
   }
 }
 
-function openCreateModal() {
+function openCreateModal(targetCwd = "") {
   state.createDraftName = "";
+  state.createTargetCwd = String(targetCwd || state.defaultCreateCwd || "").trim();
   state.createModalOpen = true;
 }
 
@@ -724,6 +726,7 @@ function closeCreateModal() {
     return;
   }
   state.createModalOpen = false;
+  state.createTargetCwd = "";
   state.createDraftName = "";
 }
 
@@ -1124,6 +1127,10 @@ async function openSessionItem(session, { skipRoute = false } = {}) {
 
 async function createSessionInGroup(group) {
   const cwd = String(group?.cwd || "").trim();
+  if (cwd) {
+    openCreateModal(cwd);
+    return;
+  }
   if (!cwd) {
     setStatus("该分组目录不可用，无法新增会话。");
     return;
@@ -1155,11 +1162,11 @@ async function createSessionInGroup(group) {
 }
 
 async function createQuickSession() {
-  openCreateModal();
+  openCreateModal(state.defaultCreateCwd);
 }
 
 async function submitCreateSession() {
-  const fallbackCwd = String(state.defaultCreateCwd || "").trim();
+  const fallbackCwd = String(state.createTargetCwd || state.defaultCreateCwd || "").trim();
   const draftName = String(state.createDraftName || "").trim();
 
   try {
