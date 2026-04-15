@@ -94,6 +94,7 @@ const state = reactive({
   activeStreamBuffer: "",
   connectionState: CONNECTION_IDLE,
   turnActive: false,
+  turnCompletedAt: 0,
   reconnectAttempts: 0,
   reconnectInFlight: false,
   pendingSessionId: "",
@@ -255,6 +256,16 @@ const connectionLabel = computed(() => {
 });
 const canReconnectActiveSession = computed(() => {
   return Boolean(state.activeLiveSessionId) && state.connectionState === CONNECTION_DISCONNECTED;
+});
+const sessionNoticeText = computed(() => {
+  const text = String(state.statusText || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (WAITING_STATUS_TEXTS.has(text) || text === "本轮回复已结束。") {
+    return "";
+  }
+  return text;
 });
 const canSend = computed(() => Boolean(composerDraft.value.trim()));
 const canInterrupt = computed(() => {
@@ -493,6 +504,7 @@ function handleTurnStatus(payload = {}) {
 
   if (status === "running") {
     state.turnActive = true;
+    state.turnCompletedAt = 0;
     if (state.connectionState !== CONNECTION_STREAMING) {
       setConnectionState(CONNECTION_SENDING);
       if (!WAITING_STATUS_TEXTS.has(state.statusText)) {
@@ -504,6 +516,7 @@ function handleTurnStatus(payload = {}) {
 
   if (status === "completed") {
     state.turnActive = false;
+    state.turnCompletedAt = Date.now();
     clearSubmitFallbackTimer();
     finalizeAssistantStream();
     if (state.connectionState !== CONNECTION_DISCONNECTED && state.connectionState !== CONNECTION_RECONNECTING) {
@@ -1239,6 +1252,7 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
   state.viewLoading = true;
   state.turnActive = false;
+  state.turnCompletedAt = 0;
   setStatus("正在连接会话…");
   try {
     state.activeSessionId = session.id;
@@ -1291,6 +1305,7 @@ async function openHistoricalSession(session, { skipRoute = false } = {}) {
   resetConnectionRecovery();
   setConnectionState(CONNECTION_IDLE);
   state.turnActive = false;
+  state.turnCompletedAt = 0;
   finalizeAssistantStream();
   state.pendingSessionId = session.id;
   state.viewLoading = true;
@@ -1509,6 +1524,7 @@ async function submitInput() {
   try {
     state.loading = true;
     state.turnActive = true;
+    state.turnCompletedAt = 0;
     setConnectionState(CONNECTION_SENDING);
     setStatus("正在发送…");
     if (expectedThreadId.value && activeThreadId.value && expectedThreadId.value !== activeThreadId.value) {
@@ -1624,6 +1640,7 @@ async function backToList() {
   resetConnectionRecovery();
   setConnectionState(CONNECTION_IDLE);
   state.turnActive = false;
+  state.turnCompletedAt = 0;
   finalizeAssistantStream();
   state.replayGuardActive = false;
   state.replayGuardPrompt = "";
@@ -1637,6 +1654,7 @@ async function backToList() {
   state.createModalOpen = false;
   state.createDraftName = "";
   composerDraft.value = "";
+  setStatus("");
   setMessages([]);
   if (route.name !== "sessions") {
     await router.push({ name: "sessions" });
@@ -1873,7 +1891,7 @@ if (typeof window !== 'undefined') {
           </section>
         </div>
 
-        <div v-if="state.statusText" class="notice-strip">{{ state.statusText }}</div>
+        <div v-if="sessionNoticeText" class="notice-strip">{{ sessionNoticeText }}</div>
       </section>
 
       <ChatView
@@ -1889,6 +1907,7 @@ if (typeof window !== 'undefined') {
         :connection-state="state.connectionState"
         :connection-label="connectionLabel"
         :can-reconnect="canReconnectActiveSession"
+        :turn-completed-at="state.turnCompletedAt"
         :workspace-name="activeWorkspaceName"
         :assistant-name="activeAssistantName"
         :messages="state.activeMessages"
