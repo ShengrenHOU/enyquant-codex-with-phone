@@ -62,6 +62,28 @@ const visibleMessages = computed(() => {
 const isRunning = computed(() => Boolean(props.canInterrupt));
 const primaryActionLabel = computed(() => (isRunning.value ? "中断" : "发送"));
 const canPrimaryAction = computed(() => (isRunning.value ? !props.loading : props.canSend && !props.loading));
+const showReplyActivityDock = computed(() => {
+  return ["sending", "streaming", "reconnecting"].includes(String(props.connectionState || "").trim());
+});
+const replyActivityTitle = computed(() => {
+  switch (String(props.connectionState || "").trim()) {
+    case "sending":
+      return "Codex 正在思考";
+    case "streaming":
+      return "Codex 仍在回复中";
+    case "reconnecting":
+      return "正在恢复回复连接";
+    default:
+      return "";
+  }
+});
+const replyActivityDetail = computed(() => {
+  const text = String(props.connectionLabel || "").trim();
+  if (!text || text === replyActivityTitle.value) {
+    return "";
+  }
+  return text;
+});
 const quietStatusText = computed(() => {
   const text = String(props.statusText || "").trim();
   if (!text) {
@@ -552,6 +574,20 @@ onBeforeUnmount(() => {
       >
         有新内容
       </button>
+
+      <div v-if="showReplyActivityDock" class="reply-activity-dock" :class="`state-${connectionState}`">
+        <div class="reply-activity-left">
+          <span class="reply-activity-indicator" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+          <div class="reply-activity-copy">
+            <p class="reply-activity-title">{{ replyActivityTitle }}</p>
+            <p v-if="replyActivityDetail" class="reply-activity-detail">{{ replyActivityDetail }}</p>
+          </div>
+        </div>
+      </div>
 
       <p v-if="quietStatusText" class="chat-status highlighted">{{ quietStatusText }}</p>
 
@@ -1045,6 +1081,95 @@ onBeforeUnmount(() => {
   box-shadow: 0 10px 24px rgba(75, 58, 46, 0.18);
 }
 
+.reply-activity-dock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 14px 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(205, 194, 183, 0.78);
+  background: rgba(255, 251, 247, 0.96);
+  box-shadow: 0 12px 30px rgba(104, 84, 65, 0.08);
+  animation: banner-rise 180ms ease;
+}
+
+.reply-activity-dock.state-streaming {
+  background: rgba(246, 251, 247, 0.96);
+}
+
+.reply-activity-dock.state-reconnecting,
+.reply-activity-dock.state-sending {
+  background: rgba(255, 248, 240, 0.96);
+}
+
+.reply-activity-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reply-activity-indicator {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 4px;
+  width: 22px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.reply-activity-indicator span {
+  width: 4px;
+  border-radius: 999px;
+  background: #a8845f;
+  animation: activity-bars 0.9s ease-in-out infinite;
+}
+
+.state-streaming .reply-activity-indicator span {
+  background: #5b9b74;
+}
+
+.state-reconnecting .reply-activity-indicator span,
+.state-sending .reply-activity-indicator span {
+  background: #c28f4d;
+}
+
+.reply-activity-indicator span:nth-child(1) {
+  height: 9px;
+  animation-delay: 0s;
+}
+
+.reply-activity-indicator span:nth-child(2) {
+  height: 14px;
+  animation-delay: 0.12s;
+}
+
+.reply-activity-indicator span:nth-child(3) {
+  height: 11px;
+  animation-delay: 0.24s;
+}
+
+.reply-activity-copy {
+  min-width: 0;
+}
+
+.reply-activity-title {
+  margin: 0;
+  color: #5e4d3f;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.reply-activity-detail {
+  margin: 4px 0 0;
+  color: #8a7768;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
 .thread-hint {
   align-self: center;
   max-width: min(100%, 44rem);
@@ -1203,6 +1328,17 @@ onBeforeUnmount(() => {
   50% {
     opacity: 1;
     transform: scale(1.12);
+  }
+}
+
+@keyframes activity-bars {
+  0%, 100% {
+    transform: scaleY(0.72);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scaleY(1.12);
+    opacity: 1;
   }
 }
 </style>
