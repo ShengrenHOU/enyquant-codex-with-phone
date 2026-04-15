@@ -581,6 +581,10 @@ onBeforeUnmount(() => {
   background: rgba(246, 251, 247, 0.9);
 }
 
+.connection-banner.state-sending {
+  background: rgba(250, 247, 241, 0.92);
+}
+
 .connection-banner.state-disconnected {
   background: rgba(255, 244, 242, 0.94);
 }
@@ -646,6 +650,7 @@ onBeforeUnmount(() => {
 .message-item.assistant {
   align-self: flex-start;
   align-items: flex-start;
+  animation: message-rise 180ms ease both;
 }
 
 .message-item.user {
@@ -996,10 +1001,22 @@ onBeforeUnmount(() => {
   font-weight: 600;
   box-shadow: 0 12px 24px rgba(139, 117, 97, 0.16);
   touch-action: manipulation;
+  transition: transform 120ms ease, box-shadow 180ms ease, opacity 140ms ease;
 }
 
 .composer-send:disabled {
   opacity: 0.46;
   box-shadow: none;
+}
+
+@keyframes message-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

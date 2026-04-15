@@ -330,6 +330,10 @@ onBeforeUnmount(() => {
   opacity: 0.55;
 }
 
+.workspace-action:active {
+  transform: scale(0.98);
+}
+
 .continue-card {
   display: flex;
   align-items: center;
@@ -391,6 +395,10 @@ onBeforeUnmount(() => {
 
 .continue-btn.active {
   background: linear-gradient(180deg, #9f866d 0%, #8d745c 100%);
+}
+
+.continue-btn:active {
+  transform: scale(0.98);
 }
 
 .home-skeleton {

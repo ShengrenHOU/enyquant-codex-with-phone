@@ -1159,31 +1159,49 @@ function selectModel(preferred, fallback) {
   return String(fallback || "").trim();
 }
 
+function resolveCodexRuntime(config, { model = "", profile = "", extraArgs = null, fullAccess = null } = {}) {
+  const selectedModel = selectModel(model, config.mobileCodexModel || config.codexModel);
+  const selectedProfile = String(profile || config.mobileCodexProfile || config.codexProfile || "").trim();
+  const selectedExtraArgs =
+    Array.isArray(extraArgs) && extraArgs.length > 0
+      ? uniqueTrimmedStrings(extraArgs)
+      : uniqueTrimmedStrings(config.mobileCodexExtraArgs || config.codexExtraArgs || []);
+  const selectedFullAccess =
+    typeof fullAccess === "boolean" ? fullAccess : Boolean(config.mobileCodexFullAccess ?? config.codexFullAccess);
+
+  return {
+    model: selectedModel,
+    profile: selectedProfile,
+    extraArgs: selectedExtraArgs,
+    fullAccess: selectedFullAccess
+  };
+}
+
 function buildProviders(config) {
   const codexBootstrapNames = uniqueStrings(["codex", commandBaseName(config.codexBin)]);
   const ccBootstrapNames = uniqueStrings(["cc", "claude", commandBaseName(config.ccBin)]);
-  const codexModelOptions = uniqueTrimmedStrings([config.codexModel, ...(config.codexModels || [])]);
+  const codexModelOptions = uniqueTrimmedStrings([config.mobileCodexModel, config.codexModel, ...(config.codexModels || [])]);
   const ccModelOptions = uniqueTrimmedStrings([config.ccModel, ...(config.ccModels || [])]);
-  const codexArgs = ({ resumeSessionId, model }) => {
+  const codexArgs = ({ resumeSessionId, model, profile, extraArgs, fullAccess }) => {
     const args = [];
-    const selectedModel = selectModel(model, config.codexModel);
+    const runtime = resolveCodexRuntime(config, { model, profile, extraArgs, fullAccess });
     if (resumeSessionId) {
       args.push("resume", "--all", resumeSessionId);
     }
-    if (selectedModel) {
-      args.push("--model", selectedModel);
+    if (runtime.model) {
+      args.push("--model", runtime.model);
     }
-    if (config.codexProfile) {
-      args.push("--profile", config.codexProfile);
+    if (runtime.profile) {
+      args.push("--profile", runtime.profile);
     }
     if (config.codexNoAltScreen) {
       args.push("--no-alt-screen");
     }
-    if (config.codexFullAccess) {
+    if (runtime.fullAccess) {
       args.push("--dangerously-bypass-approvals-and-sandbox");
     }
-    if (config.codexExtraArgs.length > 0) {
-      args.push(...config.codexExtraArgs);
+    if (runtime.extraArgs.length > 0) {
+      args.push(...runtime.extraArgs);
     }
     return args;
   };
@@ -1217,16 +1235,16 @@ function buildProviders(config) {
       fallbackPrefix: "codex",
       sessionsDir: config.codexSessionsDir,
       bootstrapNames: codexBootstrapNames,
-      defaultModel: config.codexModel,
+      defaultModel: config.mobileCodexModel || config.codexModel,
       models: codexModelOptions,
-      buildSpawnSpec({ resumeSessionId, model }) {
+      buildSpawnSpec({ resumeSessionId, model, profile, extraArgs, fullAccess }) {
         return {
           file: config.codexBin,
-          args: codexArgs({ resumeSessionId, model })
+          args: codexArgs({ resumeSessionId, model, profile, extraArgs, fullAccess })
         };
       },
-      buildCommand({ resumeSessionId, model }) {
-        const parts = [config.codexBin, ...codexArgs({ resumeSessionId, model })];
+      buildCommand({ resumeSessionId, model, profile, extraArgs, fullAccess }) {
+        const parts = [config.codexBin, ...codexArgs({ resumeSessionId, model, profile, extraArgs, fullAccess })];
         return buildShellCommand(parts, config.shellQuoteStyle);
       }
     },
@@ -1534,10 +1552,17 @@ export class SessionManager {
     const resolvedCwd = this.resolveCwd(cwd);
     const fallbackName = `${resolvedProvider.fallbackPrefix}-${this.sessions.size + 1}`;
     const sessionName = normalizeName(name, fallbackName);
+    const codexRuntime =
+      resolvedProvider.id === "codex"
+        ? resolveCodexRuntime(this.config, { model })
+        : { model: String(model || "").trim(), profile: "", extraArgs: [], fullAccess: false };
     const spawnSpec = resolvedProvider.buildSpawnSpec({
       resumeSessionId: String(resumeSessionId || "").trim() || null,
       name: sessionName,
-      model: String(model || "").trim()
+      model: codexRuntime.model,
+      profile: codexRuntime.profile,
+      extraArgs: codexRuntime.extraArgs,
+      fullAccess: codexRuntime.fullAccess
     });
 
     if (resolvedProvider.id === "codex") {
@@ -1565,7 +1590,10 @@ export class SessionManager {
         resumeSessionId: String(resumeSessionId || "").trim() || null,
         resumeBootstrapComplete: true,
         pendingResumeInput: "",
-        model: String(model || "").trim() || resolvedProvider.defaultModel || "",
+        model: codexRuntime.model || resolvedProvider.defaultModel || "",
+        profile: codexRuntime.profile || "",
+        extraArgs: codexRuntime.extraArgs || [],
+        fullAccess: resolvedProvider.id === "codex" ? codexRuntime.fullAccess : this.config.ccFullAccess,
         titleSource: String(name || "").trim() ? "user_provided" : "auto_generated",
         runnerMode: preferAppServer ? "app_server" : "json_exec",
         turnRunning: false,
@@ -1616,7 +1644,10 @@ export class SessionManager {
       resumeSessionId: String(resumeSessionId || "").trim() || null,
       resumeBootstrapComplete: !String(resumeSessionId || "").trim(),
       pendingResumeInput: "",
-      model: String(model || "").trim() || resolvedProvider.defaultModel || "",
+      model: codexRuntime.model || resolvedProvider.defaultModel || "",
+      profile: codexRuntime.profile || "",
+      extraArgs: codexRuntime.extraArgs || [],
+      fullAccess: resolvedProvider.id === "codex" ? codexRuntime.fullAccess : this.config.ccFullAccess,
       titleSource: String(name || "").trim() ? "user_provided" : "auto_generated",
       sessionType: "main",
       parentThreadId: "",
@@ -1924,22 +1955,27 @@ export class SessionManager {
 
   buildCodexJsonExecArgs(session, prompt) {
     const args = ["exec"];
+    const runtime = resolveCodexRuntime(this.config, {
+      model: session.model,
+      profile: session.profile,
+      extraArgs: session.extraArgs,
+      fullAccess: session.fullAccess
+    });
     if (session.resumeSessionId) {
       args.push("resume", "--all", session.resumeSessionId);
     }
     args.push("--json", "--skip-git-repo-check");
-    const model = String(session.model || "").trim();
-    if (model) {
-      args.push("--model", model);
+    if (runtime.model) {
+      args.push("--model", runtime.model);
     }
-    if (this.config.codexProfile) {
-      args.push("--profile", this.config.codexProfile);
+    if (runtime.profile) {
+      args.push("--profile", runtime.profile);
     }
-    if (this.config.codexFullAccess) {
+    if (runtime.fullAccess) {
       args.push("--dangerously-bypass-approvals-and-sandbox");
     }
-    if (Array.isArray(this.config.codexExtraArgs) && this.config.codexExtraArgs.length > 0) {
-      args.push(...this.config.codexExtraArgs);
+    if (Array.isArray(runtime.extraArgs) && runtime.extraArgs.length > 0) {
+      args.push(...runtime.extraArgs);
     }
     args.push(prompt);
     return args;
@@ -2164,6 +2200,9 @@ export class SessionManager {
       inputPreview: session.inputPreview,
       resumeSessionId: session.resumeSessionId,
       model: session.model || "",
+      profile: session.profile || "",
+      extraArgs: Array.isArray(session.extraArgs) ? [...session.extraArgs] : [],
+      fullAccess: Boolean(session.fullAccess),
       titleSource: session.titleSource || "",
       sessionType: session.sessionType || "main",
       parentThreadId: session.parentThreadId || "",
@@ -2713,7 +2752,11 @@ export class SessionManager {
     const provider = this.getProvider(session.provider);
     return provider.buildCommand({
       resumeSessionId: session.resumeSessionId,
-      name: session.autoNamed ? "" : session.name
+      name: session.autoNamed ? "" : session.name,
+      model: session.model,
+      profile: session.profile,
+      extraArgs: session.extraArgs,
+      fullAccess: session.fullAccess
     });
   }
 }

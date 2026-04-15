@@ -1773,7 +1773,8 @@ if (typeof window !== 'undefined') {
     />
 
     <template v-else>
-      <section v-if="route.name === 'sessions'" class="mobile-shell">
+      <Transition name="page-shell" mode="out-in">
+      <section v-if="route.name === 'sessions'" class="mobile-shell" key="sessions">
         <header class="mobile-header list">
           <div class="header-copy">
             <h1>会话</h1>
@@ -1825,6 +1826,7 @@ if (typeof window !== 'undefined') {
 
       <ChatView
         v-else-if="route.name === 'chat' && state.activeSessionMeta"
+        :key="`chat:${state.activeSessionMeta?.resumeSessionId || state.activeSessionMeta?.id || ''}`"
         :session-key="state.activeSessionMeta?.resumeSessionId || state.activeSessionMeta?.id || ''"
         :open-token="state.activeSessionOpenToken"
         :title="activeSessionTitle"
@@ -1850,9 +1852,10 @@ if (typeof window !== 'undefined') {
         @submit="submitInput"
       />
 
-      <section v-else class="mobile-shell centered-shell">
+      <section v-else class="mobile-shell centered-shell" key="loading-shell">
         <div class="splash-card">正在加载会话页面…</div>
       </section>
+      </Transition>
     </template>
   </div>
 </template>

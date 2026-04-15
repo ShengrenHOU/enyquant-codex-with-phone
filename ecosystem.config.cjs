@@ -27,12 +27,12 @@ module.exports = {
   apps: [
     {
       ...shared,
-      name: "codex-cc-web-terminal",
+      name: "enyquant-codex-with-phone",
       watch: false
     },
     {
       ...shared,
-      name: "codex-cc-web-terminal-dev",
+      name: "enyquant-codex-with-phone-dev",
       watch: [path.join(root, "src"), path.join(root, "web"), path.join(root, ".env")],
       ignore_watch: [
         path.join(root, "data"),

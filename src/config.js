@@ -98,6 +98,12 @@ export const config = {
   codexFullAccess: boolEnv("CODEX_FULL_ACCESS", true),
   codexNoAltScreen: boolEnv("CODEX_NO_ALT_SCREEN", true),
   codexExtraArgs: listEnv("CODEX_EXTRA_ARGS"),
+  mobileCodexModel: env("MOBILE_CODEX_MODEL", env("CODEX_MODEL", "")),
+  mobileCodexProfile: env("MOBILE_CODEX_PROFILE", env("CODEX_PROFILE", "")),
+  mobileCodexFullAccess: boolEnv("MOBILE_CODEX_FULL_ACCESS", boolEnv("CODEX_FULL_ACCESS", true)),
+  mobileCodexExtraArgs: hasEnv("MOBILE_CODEX_EXTRA_ARGS")
+    ? listEnv("MOBILE_CODEX_EXTRA_ARGS")
+    : listEnv("CODEX_EXTRA_ARGS"),
   codexAppServerEnabled: boolEnv("CODEX_APP_SERVER_ENABLED", true),
   codexAppServerListenUrl: env("CODEX_APP_SERVER_LISTEN_URL", "ws://127.0.0.1:8777"),
   codexAppServerConnectTimeoutMs: intEnv("CODEX_APP_SERVER_CONNECT_TIMEOUT_MS", 10_000),
