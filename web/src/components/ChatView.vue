@@ -5,6 +5,9 @@ import DOMPurify from "dompurify";
 
 const BOTTOM_THRESHOLD = 84;
 const MAX_COMPOSER_HEIGHT = 160;
+const DEFAULT_RENDER_LIMIT = 40;
+const RENDER_CHUNK_SIZE = 30;
+const COMPLETE_BADGE_MS = 1600;
 
 const props = defineProps({
   sessionKey: { type: String, default: "" },
@@ -17,6 +20,7 @@ const props = defineProps({
   connectionState: { type: String, default: "idle" },
   connectionLabel: { type: String, default: "" },
   canReconnect: { type: Boolean, default: false },
+  turnCompletedAt: { type: Number, default: 0 },
   workspaceName: { type: String, default: "" },
   assistantName: { type: String, default: "Codex" },
   messages: { type: Array, default: () => [] },
@@ -36,15 +40,41 @@ const keyboardInset = ref(0);
 const isPinnedToBottom = ref(true);
 const isTouchDevice = ref(false);
 const showProcessDetails = ref(false);
+const renderLimit = ref(DEFAULT_RENDER_LIMIT);
+const hasUnreadBelow = ref(false);
+const showTurnCompleteBadge = ref(false);
+let completeBadgeTimer = null;
 
 const chatShellStyle = computed(() => ({
   "--chat-vh": viewportHeight.value ? `${viewportHeight.value}px` : undefined,
   "--chat-keyboard-inset": `${keyboardInset.value}px`
 }));
 const showConnectionBanner = computed(() => Boolean(props.connectionLabel));
+const totalMessages = computed(() => props.messages.length);
+const hasOlderMessages = computed(() => totalMessages.value > renderLimit.value);
+const olderMessageCount = computed(() => Math.max(0, totalMessages.value - Math.min(totalMessages.value, renderLimit.value)));
+const visibleMessages = computed(() => {
+  if (!hasOlderMessages.value) {
+    return props.messages;
+  }
+  return props.messages.slice(-renderLimit.value);
+});
 const isRunning = computed(() => Boolean(props.canInterrupt));
 const primaryActionLabel = computed(() => (isRunning.value ? "中断" : "发送"));
 const canPrimaryAction = computed(() => (isRunning.value ? !props.loading : props.canSend && !props.loading));
+const quietStatusText = computed(() => {
+  const text = String(props.statusText || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text === String(props.connectionLabel || "").trim()) {
+    return "";
+  }
+  if (text === "本轮回复已结束。") {
+    return "";
+  }
+  return text;
+});
 
 const PROCESS_PATTERNS = [
   /^›/,
@@ -176,7 +206,7 @@ function preprocessDisplayMarkdown(value) {
 }
 
 const renderedMessages = computed(() =>
-  props.messages.map((message) => {
+  visibleMessages.value.map((message) => {
     const parts = splitMessageParts(message);
     const partType = String(message?.partType || "").trim();
     const payload = message?.payload || {};
@@ -254,7 +284,31 @@ function scrollToBottom(force = false) {
   });
 }
 
+function clearCompleteBadgeTimer() {
+  if (completeBadgeTimer) {
+    window.clearTimeout(completeBadgeTimer);
+    completeBadgeTimer = null;
+  }
+}
+
+function dismissTurnCompleteBadge() {
+  clearCompleteBadgeTimer();
+  showTurnCompleteBadge.value = false;
+}
+
+function armTurnCompleteBadge() {
+  dismissTurnCompleteBadge();
+  showTurnCompleteBadge.value = true;
+  completeBadgeTimer = window.setTimeout(() => {
+    showTurnCompleteBadge.value = false;
+    completeBadgeTimer = null;
+  }, COMPLETE_BADGE_MS);
+}
+
 function handleInput(event) {
+  if (event?.target?.value) {
+    dismissTurnCompleteBadge();
+  }
   emit("update:draft", event.target.value);
   resizeComposer(event, { keepBottom: true });
 }
@@ -288,12 +342,25 @@ function handlePrimaryAction() {
 
 function handleStreamScroll(event) {
   isPinnedToBottom.value = isNearBottom(event.target);
+  if (isPinnedToBottom.value) {
+    hasUnreadBelow.value = false;
+  }
 }
 
 function handleComposerFocus() {
+  dismissTurnCompleteBadge();
   if (!isNearBottom(messageListEl.value)) {
     return;
   }
+  scrollToBottom(true);
+}
+
+function loadOlderMessages() {
+  renderLimit.value += RENDER_CHUNK_SIZE;
+}
+
+function jumpToLatest() {
+  hasUnreadBelow.value = false;
   scrollToBottom(true);
 }
 
@@ -326,9 +393,17 @@ function handleWindowResize() {
 }
 
 watch(
-  () => props.messages.map((message) => `${message.id}:${message.text?.length || 0}`).join("|"),
-  () => {
-    scrollToBottom(false);
+  () => `${props.messages.length}:${props.messages.at(-1)?.id || ""}:${props.messages.at(-1)?.text?.length || 0}`,
+  (_, previous) => {
+    if (!previous) {
+      scrollToBottom(false);
+      return;
+    }
+    if (isPinnedToBottom.value) {
+      scrollToBottom(false);
+      return;
+    }
+    hasUnreadBelow.value = true;
   },
   { flush: "post" }
 );
@@ -336,6 +411,9 @@ watch(
 watch(
   () => `${props.sessionKey}::${props.openToken}`,
   () => {
+    renderLimit.value = DEFAULT_RENDER_LIMIT;
+    hasUnreadBelow.value = false;
+    dismissTurnCompleteBadge();
     isPinnedToBottom.value = true;
     scrollToBottom(true);
   },
@@ -344,10 +422,24 @@ watch(
 
 watch(
   () => props.draft,
-  () => {
+  (value) => {
+    if (value) {
+      dismissTurnCompleteBadge();
+    }
     nextTick(() => resizeComposer(composerEl.value, { keepBottom: true }));
   },
   { flush: "post", immediate: true }
+);
+
+watch(
+  () => props.turnCompletedAt,
+  (value) => {
+    if (!value) {
+      dismissTurnCompleteBadge();
+      return;
+    }
+    armTurnCompleteBadge();
+  }
 );
 
 onMounted(() => {
@@ -365,6 +457,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  dismissTurnCompleteBadge();
   if (typeof window !== "undefined") {
     window.removeEventListener("resize", handleWindowResize);
     window.visualViewport?.removeEventListener("resize", handleViewportChange);
@@ -404,6 +497,15 @@ onBeforeUnmount(() => {
       </div>
 
       <section ref="messageListEl" class="message-stream" @scroll="handleStreamScroll">
+        <button
+          v-if="hasOlderMessages"
+          type="button"
+          class="history-window-btn"
+          @click="loadOlderMessages"
+        >
+          加载更早内容（{{ olderMessageCount }}）
+        </button>
+
         <div v-if="showSharedThreadHint" class="thread-hint">
           已写入共享 thread。若桌面 Codex App 没刷新，重新进入该会话即可看到更新。
         </div>
@@ -440,7 +542,18 @@ onBeforeUnmount(() => {
         {{ showProcessDetails ? "隐藏过程详情" : "显示过程详情" }}
       </button>
 
-      <p v-if="statusText" class="chat-status highlighted">{{ statusText }}</p>
+      <div v-if="showTurnCompleteBadge" class="turn-complete-badge">本轮已结束</div>
+
+      <button
+        v-if="hasUnreadBelow"
+        type="button"
+        class="unread-chip"
+        @click="jumpToLatest"
+      >
+        有新内容
+      </button>
+
+      <p v-if="quietStatusText" class="chat-status highlighted">{{ quietStatusText }}</p>
 
       <form class="composer" @submit.prevent="emit('submit')">
         <textarea
@@ -645,6 +758,18 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.history-window-btn {
+  align-self: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 250, 245, 0.92);
+  border: 1px solid rgba(210, 199, 189, 0.78);
+  color: #857364;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .message-item {
@@ -887,6 +1012,37 @@ onBeforeUnmount(() => {
   border-radius: 14px;
   background: rgba(255, 250, 245, 0.92);
   color: #7f6b5a;
+}
+
+.turn-complete-badge {
+  align-self: center;
+  margin: 0 14px 10px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(249, 245, 240, 0.96);
+  border: 1px solid rgba(214, 204, 194, 0.72);
+  color: #847466;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  animation: banner-rise 180ms ease;
+}
+
+.unread-chip {
+  position: sticky;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  align-self: center;
+  z-index: 4;
+  margin-top: -2px;
+  margin-bottom: 8px;
+  padding: 9px 13px;
+  border-radius: 999px;
+  background: rgba(86, 72, 61, 0.92);
+  color: #fffdfb;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(75, 58, 46, 0.18);
 }
 
 .thread-hint {
