@@ -37,6 +37,7 @@ let lastHomeVisibleRefreshAt = 0;
 
 const CONNECTION_IDLE = "idle";
 const CONNECTION_CONNECTING = "connecting";
+const CONNECTION_CONNECTED = "connected";
 const CONNECTION_SENDING = "sending";
 const CONNECTION_STREAMING = "streaming";
 const CONNECTION_RECONNECTING = "reconnecting";
