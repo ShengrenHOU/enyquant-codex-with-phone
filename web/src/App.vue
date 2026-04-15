@@ -43,7 +43,7 @@ const CONNECTION_RECONNECTING = "reconnecting";
 const CONNECTION_DISCONNECTED = "disconnected";
 const MAX_RECONNECT_ATTEMPTS = 3;
 const HOME_REFRESH_COOLDOWN_MS = 1500;
-const WAITING_STATUS_TEXTS = new Set(["等待 Codex 回复…", "等待首个响应…", "Codex 正在思考…", "上下文较重，仍在准备首个响应…", "正在发送…"]);
+const WAITING_STATUS_TEXTS = new Set(["等待 Codex 回复…", "等待首个响应…", "Codex 正在思考…", "上下文较重，仍在准备首个响应…", "正在发送…", "正在生成回复…"]);
 
 const LIVE_BOOTSTRAP_LINE_PATTERNS = [
   /^[╭╰│─]+$/,
@@ -93,6 +93,7 @@ const state = reactive({
   activeSocket: null,
   activeStreamBuffer: "",
   connectionState: CONNECTION_IDLE,
+  turnActive: false,
   reconnectAttempts: 0,
   reconnectInFlight: false,
   pendingSessionId: "",
@@ -265,6 +266,9 @@ const canInterrupt = computed(() => {
     return false;
   }
   if (state.loading) {
+    return true;
+  }
+  if (state.turnActive) {
     return true;
   }
   if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
@@ -478,6 +482,43 @@ function finalizeAssistantStream() {
   state.activeStreamBuffer = "";
   if (state.activeLiveSessionId && state.connectionState === CONNECTION_STREAMING) {
     setConnectionState(CONNECTION_CONNECTED);
+  }
+}
+
+function handleTurnStatus(payload = {}) {
+  const status = String(payload?.status || "").trim().toLowerCase();
+  if (!status) {
+    return;
+  }
+
+  if (status === "running") {
+    state.turnActive = true;
+    if (state.connectionState !== CONNECTION_STREAMING) {
+      setConnectionState(CONNECTION_SENDING);
+      if (!WAITING_STATUS_TEXTS.has(state.statusText)) {
+        setStatus("正在生成回复…");
+      }
+    }
+    return;
+  }
+
+  if (status === "completed") {
+    state.turnActive = false;
+    clearSubmitFallbackTimer();
+    finalizeAssistantStream();
+    if (state.connectionState !== CONNECTION_DISCONNECTED && state.connectionState !== CONNECTION_RECONNECTING) {
+      setConnectionState(CONNECTION_CONNECTED);
+    }
+    if (state.statusText === "已发送中断指令。") {
+      setStatus("当前流程已中断。");
+      return;
+    }
+    const errorText = String(payload?.error || "").trim();
+    if (errorText) {
+      setStatus(errorText);
+      return;
+    }
+    setStatus("本轮回复已结束。");
   }
 }
 
@@ -1088,6 +1129,11 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
       return;
     }
 
+    if (payload.type === "turn_status") {
+      handleTurnStatus(payload);
+      return;
+    }
+
     if (payload.type === "data") {
       if (payload.data && String(payload.data).trim()) {
         clearPendingReplyStatus();
@@ -1132,6 +1178,7 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
 
     if (payload.type === "exit") {
       finalizeAssistantStream();
+      state.turnActive = false;
       setConnectionState(CONNECTION_CONNECTED);
       const exitCode = Number(payload.exitCode ?? 0);
       if (state.statusText === "已发送中断指令。") {
@@ -1191,6 +1238,7 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
 async function openLiveSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
   state.viewLoading = true;
+  state.turnActive = false;
   setStatus("正在连接会话…");
   try {
     state.activeSessionId = session.id;
@@ -1242,6 +1290,7 @@ async function openHistoricalSession(session, { skipRoute = false } = {}) {
   closeSocket();
   resetConnectionRecovery();
   setConnectionState(CONNECTION_IDLE);
+  state.turnActive = false;
   finalizeAssistantStream();
   state.pendingSessionId = session.id;
   state.viewLoading = true;
@@ -1459,6 +1508,7 @@ async function submitInput() {
 
   try {
     state.loading = true;
+    state.turnActive = true;
     setConnectionState(CONNECTION_SENDING);
     setStatus("正在发送…");
     if (expectedThreadId.value && activeThreadId.value && expectedThreadId.value !== activeThreadId.value) {
@@ -1490,6 +1540,7 @@ async function submitInput() {
     setStatus("等待首个响应…");
     schedulePendingReplyProgression();
   } catch (error) {
+    state.turnActive = false;
     if (state.activeLiveSessionId) {
       setConnectionState(CONNECTION_DISCONNECTED);
     }
@@ -1572,6 +1623,7 @@ async function backToList() {
   closeSocket();
   resetConnectionRecovery();
   setConnectionState(CONNECTION_IDLE);
+  state.turnActive = false;
   finalizeAssistantStream();
   state.replayGuardActive = false;
   state.replayGuardPrompt = "";

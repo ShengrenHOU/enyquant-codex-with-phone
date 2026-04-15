@@ -1746,6 +1746,15 @@ export class SessionManager {
     }
   }
 
+  broadcastTurnStatus(session, status, extra = {}) {
+    this.broadcast(session, {
+      type: "turn_status",
+      status,
+      timestamp: nowIso(),
+      ...extra
+    });
+  }
+
   attachClient(id, ws) {
     const session = this.get(id);
     if (!session) {
@@ -1811,16 +1820,24 @@ export class SessionManager {
     session.turnHadVisibleOutput = false;
     session.turnNoReplyNotified = false;
     session.updatedAt = nowIso();
+    this.broadcastTurnStatus(session, "running");
     try {
       const result = await this.appServerBridge.startTurn(session, prompt);
       this.handleAppServerTurnResult(session, result);
       session.turnRunning = false;
       session.updatedAt = nowIso();
+      this.broadcastTurnStatus(session, "completed", {
+        hadVisibleOutput: session.turnHadVisibleOutput
+      });
       this.broadcast(session, { type: "session_updated", session: this.serialize(session) });
       this.maybeStartAppServerTurn(session);
     } catch (error) {
       session.turnRunning = false;
       session.updatedAt = nowIso();
+      this.broadcastTurnStatus(session, "completed", {
+        hadVisibleOutput: session.turnHadVisibleOutput,
+        error: error?.message || String(error)
+      });
       this.broadcast(session, {
         type: "message_part",
         role: "system",
@@ -1881,6 +1898,7 @@ export class SessionManager {
     });
     session.runningProcess = child;
     session.updatedAt = nowIso();
+    this.broadcastTurnStatus(session, "running");
 
     let stdoutBuffer = "";
     let stderrBuffer = "";
@@ -1949,6 +1967,10 @@ export class SessionManager {
           timestamp: nowIso()
         });
       }
+      this.broadcastTurnStatus(session, "completed", {
+        hadVisibleOutput: emittedAssistant,
+        exitCode: Number(code ?? 0)
+      });
       this.maybeStartJsonExecRun(session);
     });
   }
