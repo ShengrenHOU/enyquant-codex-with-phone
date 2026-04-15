@@ -11,10 +11,14 @@ const pm2Script = path.join(root, "node_modules", "pm2", "bin", "pm2");
 const ecosystemFile = path.join(root, "ecosystem.config.cjs");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const appNames = {
-  prod: "codex-cc-web-terminal",
-  dev: "codex-cc-web-terminal-dev"
+  prod: "enyquant-codex-with-phone",
+  dev: "enyquant-codex-with-phone-dev"
 };
+const legacyAppNames = ["codex-cc-web-terminal", "codex-cc-web-terminal-dev"];
 const managedAppSet = new Set(Object.values(appNames));
+for (const legacyName of legacyAppNames) {
+  managedAppSet.add(legacyName);
+}
 
 function fail(message) {
   throw new Error(message);
@@ -205,7 +209,7 @@ async function handleStatus(options) {
 }
 
 function handleStop() {
-  runPm2(["delete", appNames.prod, appNames.dev], { allowFailure: true });
+  runPm2(["delete", appNames.prod, appNames.dev, ...legacyAppNames], { allowFailure: true });
   console.log("Service stopped.");
 }
 
@@ -237,7 +241,7 @@ function handleList(options) {
   }
 
   if (apps.length === 0) {
-    console.log("No codex-cc-web-terminal PM2 apps found.");
+    console.log("No ENYQUANT Codex With Phone PM2 apps found.");
     return;
   }
 

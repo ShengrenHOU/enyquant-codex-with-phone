@@ -56,6 +56,8 @@ cd enyquant-codex-with-phone
    - ACCESS_TOKEN=<帮我生成一个本地可用的强 token，并在最后明确展示给我>
    - DEFAULT_CWD=<设置成我的主工作目录>
    - CODEX_APP_SERVER_ENABLED=true
+   - MOBILE_CODEX_PROFILE=<如果有更快的手机 profile，就设成它>
+   - MOBILE_CODEX_MODEL=<如果有更快的手机模型，就设成它>
 4. 执行 npm install。
 5. 执行 npm run check。
 6. 启动服务。
@@ -82,6 +84,8 @@ ACCESS_TOKEN=换成你自己的 token
 TAILSCALE_ONLY=true
 DEFAULT_CWD=你的工作区路径
 CODEX_APP_SERVER_ENABLED=true
+MOBILE_CODEX_PROFILE=
+MOBILE_CODEX_MODEL=
 ```
 
 3. 安装依赖并做检查：
@@ -95,6 +99,13 @@ npm run check
 
 ```bash
 npm run dev
+```
+
+如果你要长期稳定用，建议直接启动常驻服务：
+
+```bash
+npm run service:start
+npm run service:status
 ```
 
 5. 电脑本地打开：
@@ -126,6 +137,31 @@ http://<电脑的100.x.x.x>:3210/#/sessions
 ```
 
 7. 用 `ACCESS_TOKEN` 登录
+
+## 手机快速模式
+
+现在这个项目支持一套手机优先的默认 Codex 运行配置。
+
+- `CODEX_*` 继续作为通用/桌面兜底
+- `MOBILE_CODEX_*` 作为这个 Web terminal 创建或恢复会话时的默认运行参数
+
+推荐用法：
+
+```env
+CODEX_PROFILE=deep-desktop
+CODEX_MODEL=
+MOBILE_CODEX_PROFILE=mobile-fast
+MOBILE_CODEX_MODEL=
+MOBILE_CODEX_FULL_ACCESS=true
+MOBILE_CODEX_EXTRA_ARGS=
+```
+
+适用场景：
+
+- 电脑端做更深、更重的工作
+- 手机端主要做接力、补位、短回合处理
+
+如果没有设置 `MOBILE_CODEX_*`，系统会自动回退到 `CODEX_*`。
 
 ## 会话同步限制：为什么手机更新了，桌面 Codex App 没更新
 
@@ -168,10 +204,57 @@ http://<电脑的100.x.x.x>:3210/#/sessions
 ```bash
 npm run dev
 npm run check
+npm run pm2:prod
+npm run pm2:save
 npm run service:start
+npm run service:restart
 npm run service:status
 npm run service:logs
+npm run service:resurrect
 ```
+
+## Windows 常驻运行
+
+如果你想把它当成长期入口使用，不要一直靠临时前台终端维持。
+
+推荐 Windows 路线：
+
+1. 安装依赖：
+
+```bash
+npm install
+```
+
+2. 用 PM2 启动生产服务：
+
+```bash
+npm run pm2:prod
+```
+
+3. 保存 PM2 进程列表：
+
+```bash
+npm run pm2:save
+```
+
+4. 检查状态：
+
+```bash
+npm run service:status
+```
+
+5. 如果重启后服务没有自动恢复，用：
+
+```bash
+npm run service:resurrect
+```
+
+健康检查方法：
+
+- `http://127.0.0.1:3210/api/health`
+- `npm run service:status`
+- `npm run service:logs`
+- 检查 `3210` 端口是否在监听
 
 ## 常见问题
 
@@ -187,6 +270,14 @@ npm run service:logs
 - 一般不是 Tailscale 本身慢
 - 主要瓶颈通常在电脑端自己的 Codex 网络链路
 - 如果你在中国并且电脑端要依赖 VPN 访问 Codex，请优先保证电脑端 VPN 稳定
+- 如果已经配置 `MOBILE_CODEX_*`，手机端会默认优先走更快的运行配置，这也是当前最推荐的提速方式
+
+### 手机突然连不上
+
+- 最常见原因是电脑上的服务没在跑
+- 先看 `npm run service:status`
+- 再看 `/api/health`
+- 必要时执行 `npm run service:start` 或 `npm run service:resurrect`
 
 ### 手机端会话列表慢
 

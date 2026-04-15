@@ -69,6 +69,15 @@ export class AppServerBridge extends EventEmitter {
       return;
     }
     const args = ["app-server", "--listen", this.listenUrl];
+    if (String(this.config.mobileCodexProfile || "").trim()) {
+      args.push("--profile", String(this.config.mobileCodexProfile).trim());
+    }
+    if (this.config.mobileCodexFullAccess) {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+    if (Array.isArray(this.config.mobileCodexExtraArgs) && this.config.mobileCodexExtraArgs.length > 0) {
+      args.push(...this.config.mobileCodexExtraArgs);
+    }
     this.proc = spawnCodexProcess(this.config.codexBin, args, {
       cwd: this.config.root,
       env: process.env,

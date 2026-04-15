@@ -56,6 +56,8 @@ Goals:
    - ACCESS_TOKEN=<generate a strong local token and show it clearly at the end>
    - DEFAULT_CWD=<set to my active workspace path>
    - CODEX_APP_SERVER_ENABLED=true
+   - MOBILE_CODEX_PROFILE=<set a faster mobile profile if available>
+   - MOBILE_CODEX_MODEL=<set a faster mobile model if available>
 4. Run npm install.
 5. Run npm run check.
 6. Start the app in dev mode.
@@ -82,6 +84,8 @@ ACCESS_TOKEN=change-this-to-your-own-token
 TAILSCALE_ONLY=true
 DEFAULT_CWD=/your/workspace/path
 CODEX_APP_SERVER_ENABLED=true
+MOBILE_CODEX_PROFILE=
+MOBILE_CODEX_MODEL=
 ```
 
 3. Install and verify:
@@ -95,6 +99,13 @@ npm run check
 
 ```bash
 npm run dev
+```
+
+For a persistent desktop service:
+
+```bash
+npm run service:start
+npm run service:status
 ```
 
 5. Open on desktop:
@@ -126,6 +137,31 @@ http://<desktop-100.x.x.x>:3210/#/sessions
 ```
 
 7. Sign in with `ACCESS_TOKEN`.
+
+## Mobile Fast Mode
+
+This project now supports a phone-first runtime default.
+
+- `CODEX_*` remains the general desktop fallback
+- `MOBILE_CODEX_*` becomes the default runtime for sessions created or resumed through this web terminal
+
+Recommended pattern:
+
+```env
+CODEX_PROFILE=deep-desktop
+CODEX_MODEL=
+MOBILE_CODEX_PROFILE=mobile-fast
+MOBILE_CODEX_MODEL=
+MOBILE_CODEX_FULL_ACCESS=true
+MOBILE_CODEX_EXTRA_ARGS=
+```
+
+Use this when:
+
+- desktop work is deeper and heavier
+- phone work is mainly continuation, triage, and short-turn iteration
+
+If `MOBILE_CODEX_*` is not set, the service falls back to `CODEX_*`.
 
 ## Session Sync Limitation With Desktop Codex App
 
@@ -167,10 +203,57 @@ This repo includes a Windows-specific Codex spawn compatibility fix:
 ```bash
 npm run dev
 npm run check
+npm run pm2:prod
+npm run pm2:save
 npm run service:start
+npm run service:restart
 npm run service:status
 npm run service:logs
+npm run service:resurrect
 ```
+
+## Persistent Windows Setup
+
+For long-term use, do not leave the service in a temporary foreground shell.
+
+Recommended Windows path:
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Start the production PM2 app:
+
+```bash
+npm run pm2:prod
+```
+
+3. Save the PM2 process list:
+
+```bash
+npm run pm2:save
+```
+
+4. Verify:
+
+```bash
+npm run service:status
+```
+
+5. If the process disappears after reboot, restore it with:
+
+```bash
+npm run service:resurrect
+```
+
+Health checks:
+
+- `http://127.0.0.1:3210/api/health`
+- `npm run service:status`
+- `npm run service:logs`
+- confirm port `3210` is listening
 
 ## Common Issues
 
@@ -186,6 +269,14 @@ npm run service:logs
 - Tailscale is usually not the bottleneck
 - the desktop's own Codex connectivity is usually the main bottleneck
 - in China, if the desktop needs a VPN for Codex, keep that desktop VPN stable
+- mobile sessions now prefer `MOBILE_CODEX_*` defaults when configured, which is the recommended way to reduce phone-side latency
+
+### Phone suddenly cannot connect
+
+- most often the desktop service is not running
+- check `npm run service:status`
+- check `/api/health`
+- if needed, run `npm run service:start` or `npm run service:resurrect`
 
 ### Session list is slow on mobile
 

@@ -32,6 +32,18 @@ const TOKEN_STORAGE_KEY = "codex-web-terminal.saved-token";
 let autoLoginTried = false;
 let replaySuppressionLines = new Set();
 let submitFallbackTimer = null;
+let reconnectTimer = null;
+let lastHomeVisibleRefreshAt = 0;
+
+const CONNECTION_IDLE = "idle";
+const CONNECTION_CONNECTING = "connecting";
+const CONNECTION_SENDING = "sending";
+const CONNECTION_STREAMING = "streaming";
+const CONNECTION_RECONNECTING = "reconnecting";
+const CONNECTION_DISCONNECTED = "disconnected";
+const MAX_RECONNECT_ATTEMPTS = 3;
+const HOME_REFRESH_COOLDOWN_MS = 1500;
+const WAITING_STATUS_TEXTS = new Set(["等待 Codex 回复…", "等待首个响应…", "Codex 正在思考…", "上下文较重，仍在准备首个响应…", "正在发送…", "正在生成回复…"]);
 
 const LIVE_BOOTSTRAP_LINE_PATTERNS = [
   /^[╭╰│─]+$/,
@@ -80,6 +92,10 @@ const state = reactive({
   activeMessages: [],
   activeSocket: null,
   activeStreamBuffer: "",
+  connectionState: CONNECTION_IDLE,
+  turnActive: false,
+  reconnectAttempts: 0,
+  reconnectInFlight: false,
   pendingSessionId: "",
   activeSessionOpenToken: 0,
   replayGuardActive: false,
@@ -212,6 +228,34 @@ const threadMismatch = computed(() => {
   }
   return expectedThreadId.value !== activeThreadId.value;
 });
+const showSharedThreadHint = computed(() => {
+  if (threadMismatch.value) {
+    return true;
+  }
+  if (!expectedThreadId.value || !activeThreadId.value) {
+    return false;
+  }
+  return Boolean(state.activeLiveSessionId) && activeThreadId.value === expectedThreadId.value;
+});
+const connectionLabel = computed(() => {
+  switch (state.connectionState) {
+    case CONNECTION_CONNECTING:
+      return "正在连接";
+    case CONNECTION_SENDING:
+      return state.statusText && WAITING_STATUS_TEXTS.has(state.statusText) ? state.statusText : "消息已发送，等待响应";
+    case CONNECTION_STREAMING:
+      return "正在接收回复";
+    case CONNECTION_RECONNECTING:
+      return "正在恢复连接";
+    case CONNECTION_DISCONNECTED:
+      return "连接已断开";
+    default:
+      return "";
+  }
+});
+const canReconnectActiveSession = computed(() => {
+  return Boolean(state.activeLiveSessionId) && state.connectionState === CONNECTION_DISCONNECTED;
+});
 const canSend = computed(() => Boolean(composerDraft.value.trim()));
 const canInterrupt = computed(() => {
   const socketReady =
@@ -222,6 +266,9 @@ const canInterrupt = computed(() => {
     return false;
   }
   if (state.loading) {
+    return true;
+  }
+  if (state.turnActive) {
     return true;
   }
   if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
@@ -243,6 +290,40 @@ function clearSubmitFallbackTimer() {
     window.clearTimeout(submitFallbackTimer);
     submitFallbackTimer = null;
   }
+}
+
+function schedulePendingReplyProgression() {
+  clearSubmitFallbackTimer();
+  submitFallbackTimer = window.setTimeout(() => {
+    if (state.connectionState !== CONNECTION_SENDING || state.statusText !== "等待首个响应…") {
+      submitFallbackTimer = null;
+      return;
+    }
+    setStatus("Codex 正在思考…");
+    submitFallbackTimer = window.setTimeout(() => {
+      if (state.connectionState === CONNECTION_SENDING && state.statusText === "Codex 正在思考…") {
+        setStatus("上下文较重，仍在准备首个响应…");
+      }
+      submitFallbackTimer = null;
+    }, 2600);
+  }, 1200);
+}
+
+function setConnectionState(nextState) {
+  state.connectionState = nextState || CONNECTION_IDLE;
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function resetConnectionRecovery() {
+  clearReconnectTimer();
+  state.reconnectAttempts = 0;
+  state.reconnectInFlight = false;
 }
 
 function toFriendlyLoginError(error) {
@@ -399,6 +480,46 @@ function finalizeAssistantStream() {
     state.activeMessages = messages;
   }
   state.activeStreamBuffer = "";
+  if (state.activeLiveSessionId && state.connectionState === CONNECTION_STREAMING) {
+    setConnectionState(CONNECTION_CONNECTED);
+  }
+}
+
+function handleTurnStatus(payload = {}) {
+  const status = String(payload?.status || "").trim().toLowerCase();
+  if (!status) {
+    return;
+  }
+
+  if (status === "running") {
+    state.turnActive = true;
+    if (state.connectionState !== CONNECTION_STREAMING) {
+      setConnectionState(CONNECTION_SENDING);
+      if (!WAITING_STATUS_TEXTS.has(state.statusText)) {
+        setStatus("正在生成回复…");
+      }
+    }
+    return;
+  }
+
+  if (status === "completed") {
+    state.turnActive = false;
+    clearSubmitFallbackTimer();
+    finalizeAssistantStream();
+    if (state.connectionState !== CONNECTION_DISCONNECTED && state.connectionState !== CONNECTION_RECONNECTING) {
+      setConnectionState(CONNECTION_CONNECTED);
+    }
+    if (state.statusText === "已发送中断指令。") {
+      setStatus("当前流程已中断。");
+      return;
+    }
+    const errorText = String(payload?.error || "").trim();
+    if (errorText) {
+      setStatus(errorText);
+      return;
+    }
+    setStatus("本轮回复已结束。");
+  }
 }
 
 function discardPendingAssistantStream() {
@@ -581,7 +702,7 @@ function appendNormalizedParts(parts = []) {
 }
 
 function clearPendingReplyStatus() {
-  if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
+  if (WAITING_STATUS_TEXTS.has(state.statusText)) {
     setStatus("");
   }
 }
@@ -822,8 +943,10 @@ async function handleLogin({ silent = false, auto = false } = {}) {
 }
 
 function closeSocket() {
+  clearReconnectTimer();
   clearSubmitFallbackTimer();
   if (state.activeSocket) {
+    state.activeSocket.__expectedClose = true;
     state.activeSocket.close();
     state.activeSocket = null;
   }
@@ -868,13 +991,87 @@ function waitForSocketOpen(socket, timeoutMs = 4000) {
   });
 }
 
-function attachLiveSocket(sessionId, historyMessages = []) {
+function shouldAutoReconnectSocket(socket) {
+  if (!socket || socket.__expectedClose) {
+    return false;
+  }
+  if (route.name !== "chat") {
+    return false;
+  }
+  if (!state.activeLiveSessionId || !state.activeSessionMeta) {
+    return false;
+  }
+  return (
+    state.activeSessionMeta.kind === "live" &&
+    String(socket.__sessionId || "").trim() === String(state.activeLiveSessionId || "").trim()
+  );
+}
+
+async function reconnectActiveSocket({ immediate = false } = {}) {
+  if (!state.activeLiveSessionId || state.reconnectInFlight) {
+    return;
+  }
+
+  clearReconnectTimer();
+  state.reconnectInFlight = true;
+  state.reconnectAttempts += 1;
+  setConnectionState(CONNECTION_RECONNECTING);
+  setStatus("正在恢复连接…");
+
+  try {
+    await attachLiveSocket(state.activeLiveSessionId, state.activeMessages, { reconnecting: true });
+    resetConnectionRecovery();
+    setConnectionState(CONNECTION_CONNECTED);
+    if (state.loading) {
+      setConnectionState(CONNECTION_SENDING);
+      setStatus("等待 Codex 回复…");
+    } else if (!String(state.activeStreamBuffer || "").trim()) {
+      setStatus("");
+    }
+  } catch (error) {
+    if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      state.reconnectInFlight = false;
+      setConnectionState(CONNECTION_DISCONNECTED);
+      setStatus(error?.message || "连接已断开，请重试。");
+      return;
+    }
+    const delay = immediate ? 480 : Math.min(3200, 600 * 2 ** (state.reconnectAttempts - 1));
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      reconnectActiveSocket();
+    }, delay);
+  } finally {
+    if (state.connectionState !== CONNECTION_DISCONNECTED) {
+      state.reconnectInFlight = false;
+    }
+  }
+}
+
+function scheduleSocketReconnect() {
+  if (state.reconnectInFlight || reconnectTimer || !state.activeLiveSessionId) {
+    return;
+  }
+  setConnectionState(CONNECTION_RECONNECTING);
+  setStatus("正在恢复连接…");
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    reconnectActiveSocket();
+  }, 480);
+}
+
+function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = false } = {}) {
   closeSocket();
   finalizeAssistantStream();
   state.activeLiveSessionId = sessionId;
   state.activeStreamBuffer = "";
   const socket = new WebSocket(resolveWsUrl(sessionId));
+  socket.__expectedClose = false;
+  socket.__sessionId = sessionId;
   state.activeSocket = socket;
+  if (!reconnecting) {
+    resetConnectionRecovery();
+  }
+  setConnectionState(reconnecting ? CONNECTION_RECONNECTING : CONNECTION_CONNECTING);
 
   socket.addEventListener("message", (event) => {
     let payload;
@@ -932,9 +1129,15 @@ function attachLiveSocket(sessionId, historyMessages = []) {
       return;
     }
 
+    if (payload.type === "turn_status") {
+      handleTurnStatus(payload);
+      return;
+    }
+
     if (payload.type === "data") {
       if (payload.data && String(payload.data).trim()) {
         clearPendingReplyStatus();
+        setConnectionState(CONNECTION_STREAMING);
       }
       appendNormalizedParts(normalizeServerPayload(payload, state.activeSessionId));
       return;
@@ -943,6 +1146,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
     if (payload.type === "message_part") {
       if (payload?.part?.type === "text" && String(payload?.part?.text || "").trim()) {
         clearPendingReplyStatus();
+        setConnectionState(CONNECTION_STREAMING);
       }
       appendNormalizedParts(normalizeServerPayload(payload, state.activeSessionId));
       return;
@@ -956,6 +1160,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
     if (payload.type === "error") {
       const errorText = String(payload.error || "会话发生未知错误。").trim();
       clearPendingReplyStatus();
+      setConnectionState(CONNECTION_DISCONNECTED);
       appendNormalizedParts([
         {
           role: "system",
@@ -973,6 +1178,8 @@ function attachLiveSocket(sessionId, historyMessages = []) {
 
     if (payload.type === "exit") {
       finalizeAssistantStream();
+      state.turnActive = false;
+      setConnectionState(CONNECTION_CONNECTED);
       const exitCode = Number(payload.exitCode ?? 0);
       if (state.statusText === "已发送中断指令。") {
         setStatus("当前流程已中断。");
@@ -993,53 +1200,75 @@ function attachLiveSocket(sessionId, historyMessages = []) {
       state.activeSocket = null;
     }
     finalizeAssistantStream();
+    if (socket.__expectedClose) {
+      return;
+    }
     if (state.statusText === "已发送中断指令。") {
+      resetConnectionRecovery();
+      setConnectionState(CONNECTION_CONNECTED);
       setStatus("当前流程已中断。");
       return;
     }
-    if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
-      setStatus("会话连接已关闭，请重试一次。");
+    if (shouldAutoReconnectSocket(socket)) {
+      scheduleSocketReconnect();
+      return;
+    }
+    setConnectionState(CONNECTION_DISCONNECTED);
+    if (WAITING_STATUS_TEXTS.has(state.statusText)) {
+      setStatus("连接已断开，请重试。");
     }
   });
 
   socket.addEventListener("error", () => {
-    if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
-      setStatus("会话连接失败，请重试一次。");
+    if (shouldAutoReconnectSocket(socket)) {
+      scheduleSocketReconnect();
+      return;
+    }
+    setConnectionState(CONNECTION_DISCONNECTED);
+    if (WAITING_STATUS_TEXTS.has(state.statusText)) {
+      setStatus("连接失败，请重试。");
     }
   });
 
-  return waitForSocketOpen(socket);
+  return waitForSocketOpen(socket).then(() => {
+    setConnectionState(CONNECTION_CONNECTED);
+  });
 }
 
 async function openLiveSession(session, { skipRoute = false } = {}) {
   state.pendingSessionId = session.id;
   state.viewLoading = true;
+  state.turnActive = false;
   setStatus("正在连接会话…");
-  state.activeSessionId = session.id;
-  const decorated = decorateSession(session);
-  state.activeSessionMeta = decorated;
-  bumpActiveSessionOpenToken();
-  if (!skipRoute && route.name !== "chat") {
-    await router.push({ name: "chat", params: { sessionId: session.id } });
-  }
-  composerDraft.value = "";
-  state.replayGuardActive = false;
-  state.replayGuardPrompt = "";
-  state.replayGuardUntil = 0;
-  // Refresh auth/config before WebSocket connect to avoid stale cookie + fresh process mismatch.
-  await bootstrapWorkspace({ includeSessions: false });
-  let historyMessages = [];
-  if (session.resumeSessionId) {
-    const hydrated = await hydrateSession(
-      {
-        ...session,
-        id: `history:${session.provider}:${session.resumeSessionId}`,
-        kind: "history",
-        status: "saved"
-      },
-      { includeMessages: true, silent: true }
-    );
-    historyMessages = hydrated?.messages || [];
+  try {
+    state.activeSessionId = session.id;
+    const decorated = decorateSession(session);
+    state.activeSessionMeta = decorated;
+    bumpActiveSessionOpenToken();
+    if (!skipRoute && route.name !== "chat") {
+      await router.push({ name: "chat", params: { sessionId: session.id } });
+    }
+    composerDraft.value = "";
+    state.replayGuardActive = false;
+    state.replayGuardPrompt = "";
+    state.replayGuardUntil = 0;
+    const hydratePromise = session.resumeSessionId
+      ? hydrateSession(
+          {
+            ...session,
+            id: `history:${session.provider}:${session.resumeSessionId}`,
+            kind: "history",
+            status: "saved"
+          },
+          { includeMessages: true, silent: true }
+        )
+      : Promise.resolve(null);
+    const bootstrapPromise =
+      state.backendHttpOrigin && state.backendWsOrigin
+        ? Promise.resolve()
+        : bootstrapWorkspace({ includeSessions: false });
+    const [, hydrated] = await Promise.all([bootstrapPromise, hydratePromise]);
+    const historyMessages = hydrated?.messages || [];
     if (hydrated?.session) {
       state.activeSessionMeta = {
         ...state.activeSessionMeta,
@@ -1048,44 +1277,51 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
         cwd: hydrated.session.cwd || state.activeSessionMeta.cwd || ""
       };
     }
+    setMessages(historyMessages);
+    await attachLiveSocket(session.id, historyMessages);
+    setStatus("");
+  } finally {
+    state.pendingSessionId = "";
+    state.viewLoading = false;
   }
-  setMessages(historyMessages);
-  await attachLiveSocket(session.id, historyMessages);
-  setStatus("");
-  state.pendingSessionId = "";
-  state.viewLoading = false;
 }
 
 async function openHistoricalSession(session, { skipRoute = false } = {}) {
   closeSocket();
+  resetConnectionRecovery();
+  setConnectionState(CONNECTION_IDLE);
+  state.turnActive = false;
   finalizeAssistantStream();
   state.pendingSessionId = session.id;
   state.viewLoading = true;
   setStatus("正在加载会话…");
-  const decorated = decorateSession(session);
-  const hydrated = await hydrateSession(session, { includeMessages: true });
-  const historyMessages = hydrated?.messages || [];
+  try {
+    const decorated = decorateSession(session);
+    const hydrated = await hydrateSession(session, { includeMessages: true });
+    const historyMessages = hydrated?.messages || [];
 
-  state.activeSessionId = session.id;
-  state.activeSessionMeta = {
-    ...decorated,
-    cwd: hydrated?.session?.cwd || decorated.cwd || "",
-    displayTitle: hydrated?.title || decorated.displayTitle,
-    displayPreview: hydrated?.preview || decorated.displayPreview
-  };
-  bumpActiveSessionOpenToken();
-  if (!skipRoute && route.name !== "chat") {
-    await router.push({ name: "chat", params: { sessionId: session.id } });
+    state.activeSessionId = session.id;
+    state.activeSessionMeta = {
+      ...decorated,
+      cwd: hydrated?.session?.cwd || decorated.cwd || "",
+      displayTitle: hydrated?.title || decorated.displayTitle,
+      displayPreview: hydrated?.preview || decorated.displayPreview
+    };
+    bumpActiveSessionOpenToken();
+    if (!skipRoute && route.name !== "chat") {
+      await router.push({ name: "chat", params: { sessionId: session.id } });
+    }
+    composerDraft.value = "";
+    state.replayGuardActive = false;
+    state.replayGuardPrompt = "";
+    state.replayGuardUntil = 0;
+    setMessages(historyMessages);
+    state.activeLiveSessionId = "";
+    setStatus("");
+  } finally {
+    state.pendingSessionId = "";
+    state.viewLoading = false;
   }
-  composerDraft.value = "";
-  state.replayGuardActive = false;
-  state.replayGuardPrompt = "";
-  state.replayGuardUntil = 0;
-  setMessages(historyMessages);
-  state.activeLiveSessionId = "";
-  setStatus("");
-  state.pendingSessionId = "";
-  state.viewLoading = false;
 }
 
 async function openSessionItem(session, { skipRoute = false } = {}) {
@@ -1247,14 +1483,11 @@ async function ensureLiveSession() {
     updatedAt: resumed.session.updatedAt
   };
   state.activeLiveSessionId = resumed.session.id;
-  await refreshSessions();
+  refreshSessions().catch(() => {});
   await attachLiveSocket(resumed.session.id, state.activeMessages);
-  setStatus("正在恢复会话上下文…");
+  setStatus("共享会话已连接，准备发送…");
   state.replayGuardActive = true;
-  state.replayGuardUntil = Date.now() + 20_000;
-  await wait(1800);
-  discardPendingAssistantStream();
-  state.activeStreamBuffer = "";
+  state.replayGuardUntil = Date.now() + 12_000;
   return resumed.session.id;
 }
 
@@ -1275,6 +1508,8 @@ async function submitInput() {
 
   try {
     state.loading = true;
+    state.turnActive = true;
+    setConnectionState(CONNECTION_SENDING);
     setStatus("正在发送…");
     if (expectedThreadId.value && activeThreadId.value && expectedThreadId.value !== activeThreadId.value) {
       throw new Error(
@@ -1302,8 +1537,13 @@ async function submitInput() {
       createMessage("user", text, new Date().toISOString(), { source: "draft" })
     ]);
     composerDraft.value = "";
-    setStatus("等待 Codex 回复…");
+    setStatus("等待首个响应…");
+    schedulePendingReplyProgression();
   } catch (error) {
+    state.turnActive = false;
+    if (state.activeLiveSessionId) {
+      setConnectionState(CONNECTION_DISCONNECTED);
+    }
     setStatus(error.message || String(error));
   } finally {
     state.loading = false;
@@ -1325,9 +1565,65 @@ function interruptActiveSession() {
   }
 }
 
+async function handleManualReconnect() {
+  if (!state.activeLiveSessionId) {
+    return;
+  }
+  state.reconnectAttempts = 0;
+  try {
+    await reconnectActiveSocket({ immediate: true });
+  } catch (error) {
+    setStatus(error?.message || String(error));
+  }
+}
+
+async function handleVisibilityRecovery() {
+  if (!state.isAuthenticated || typeof document === "undefined" || document.visibilityState !== "visible") {
+    return;
+  }
+
+  if (route.name === "sessions") {
+    const now = Date.now();
+    if (now - lastHomeVisibleRefreshAt < HOME_REFRESH_COOLDOWN_MS) {
+      return;
+    }
+    lastHomeVisibleRefreshAt = now;
+    try {
+      await refreshSessions();
+    } catch (error) {
+      setStatus(error?.message || String(error));
+    }
+    return;
+  }
+
+  if (
+    route.name === "chat" &&
+    state.activeLiveSessionId &&
+    (!state.activeSocket || state.activeSocket.readyState !== WebSocket.OPEN)
+  ) {
+    state.reconnectAttempts = 0;
+    await reconnectActiveSocket({ immediate: true });
+  }
+}
+
+function handleVisibilityChange() {
+  handleVisibilityRecovery().catch((error) => {
+    setStatus(error?.message || String(error));
+  });
+}
+
+function handleBrowserOnline() {
+  handleVisibilityRecovery().catch((error) => {
+    setStatus(error?.message || String(error));
+  });
+}
+
 async function backToList() {
   clearSubmitFallbackTimer();
   closeSocket();
+  resetConnectionRecovery();
+  setConnectionState(CONNECTION_IDLE);
+  state.turnActive = false;
   finalizeAssistantStream();
   state.replayGuardActive = false;
   state.replayGuardPrompt = "";
@@ -1357,6 +1653,8 @@ watch(
   async (name) => {
     if (name === "sessions") {
       closeSocket();
+      resetConnectionRecovery();
+      setConnectionState(CONNECTION_IDLE);
       finalizeAssistantStream();
       if (state.isAuthenticated) {
         try {
@@ -1424,6 +1722,11 @@ watch(
         },
         { skipRoute: true }
       );
+    } catch (error) {
+      state.pendingSessionId = "";
+      state.viewLoading = false;
+      setStatus(error?.message || String(error));
+      await router.replace({ name: "sessions" });
     } finally {
       syncingRouteOpen = false;
     }
@@ -1459,6 +1762,12 @@ watch(
 );
 
 onMounted(async () => {
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", handleBrowserOnline, { passive: true });
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
+  }
   try {
     const savedToken = getSavedToken();
     if (savedToken) {
@@ -1482,6 +1791,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   closeSocket();
+  resetConnectionRecovery();
+  if (typeof window !== "undefined") {
+    window.removeEventListener("online", handleBrowserOnline);
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }
 });
 
 if (typeof window !== 'undefined') {
@@ -1509,7 +1825,8 @@ if (typeof window !== 'undefined') {
     />
 
     <template v-else>
-      <section v-if="route.name === 'sessions'" class="mobile-shell">
+      <Transition name="page-shell" mode="out-in">
+      <section v-if="route.name === 'sessions'" class="mobile-shell" key="sessions">
         <header class="mobile-header list">
           <div class="header-copy">
             <h1>会话</h1>
@@ -1561,12 +1878,17 @@ if (typeof window !== 'undefined') {
 
       <ChatView
         v-else-if="route.name === 'chat' && state.activeSessionMeta"
+        :key="`chat:${state.activeSessionMeta?.resumeSessionId || state.activeSessionMeta?.id || ''}`"
         :session-key="state.activeSessionMeta?.resumeSessionId || state.activeSessionMeta?.id || ''"
         :open-token="state.activeSessionOpenToken"
         :title="activeSessionTitle"
         :thread-id="activeThreadId"
         :expected-thread-id="expectedThreadId"
+        :show-shared-thread-hint="showSharedThreadHint"
         :thread-mismatch="threadMismatch"
+        :connection-state="state.connectionState"
+        :connection-label="connectionLabel"
+        :can-reconnect="canReconnectActiveSession"
         :workspace-name="activeWorkspaceName"
         :assistant-name="activeAssistantName"
         :messages="state.activeMessages"
@@ -1578,12 +1900,14 @@ if (typeof window !== 'undefined') {
         :status-text="state.statusText"
         @back="backToList"
         @interrupt="interruptActiveSession"
+        @reconnect="handleManualReconnect"
         @submit="submitInput"
       />
 
-      <section v-else class="mobile-shell centered-shell">
+      <section v-else class="mobile-shell centered-shell" key="loading-shell">
         <div class="splash-card">正在加载会话页面…</div>
       </section>
+      </Transition>
     </template>
   </div>
 </template>
