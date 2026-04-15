@@ -49,7 +49,13 @@ const chatShellStyle = computed(() => ({
   "--chat-vh": viewportHeight.value ? `${viewportHeight.value}px` : undefined,
   "--chat-keyboard-inset": `${keyboardInset.value}px`
 }));
-const showConnectionBanner = computed(() => Boolean(props.connectionLabel));
+const showConnectionBanner = computed(() => {
+  const state = String(props.connectionState || "").trim();
+  if (!props.connectionLabel) {
+    return false;
+  }
+  return ["connecting", "disconnected"].includes(state);
+});
 const totalMessages = computed(() => props.messages.length);
 const hasOlderMessages = computed(() => totalMessages.value > renderLimit.value);
 const olderMessageCount = computed(() => Math.max(0, totalMessages.value - Math.min(totalMessages.value, renderLimit.value)));
@@ -1087,21 +1093,21 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   margin: 0 14px 10px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid rgba(205, 194, 183, 0.78);
-  background: rgba(255, 251, 247, 0.96);
-  box-shadow: 0 12px 30px rgba(104, 84, 65, 0.08);
+  padding: 13px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(198, 185, 171, 0.82);
+  background: rgba(255, 250, 245, 0.98);
+  box-shadow: 0 14px 34px rgba(104, 84, 65, 0.1);
   animation: banner-rise 180ms ease;
 }
 
 .reply-activity-dock.state-streaming {
-  background: rgba(246, 251, 247, 0.96);
+  background: rgba(244, 250, 246, 0.98);
 }
 
 .reply-activity-dock.state-reconnecting,
 .reply-activity-dock.state-sending {
-  background: rgba(255, 248, 240, 0.96);
+  background: rgba(255, 247, 238, 0.98);
 }
 
 .reply-activity-left {
@@ -1157,15 +1163,15 @@ onBeforeUnmount(() => {
 
 .reply-activity-title {
   margin: 0;
-  color: #5e4d3f;
+  color: #584839;
   font-size: 13px;
   line-height: 1.2;
-  font-weight: 700;
+  font-weight: 750;
 }
 
 .reply-activity-detail {
   margin: 4px 0 0;
-  color: #8a7768;
+  color: #857261;
   font-size: 12px;
   line-height: 1.3;
 }
