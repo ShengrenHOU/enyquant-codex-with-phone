@@ -570,6 +570,7 @@ onBeforeUnmount(() => {
   color: rgba(78, 66, 56, 0.94);
   box-shadow: 0 8px 20px rgba(94, 77, 61, 0.05);
   transition: opacity 160ms ease, transform 180ms ease, background-color 180ms ease;
+  animation: banner-rise 180ms ease;
 }
 
 .connection-banner.state-reconnecting,
@@ -600,6 +601,7 @@ onBeforeUnmount(() => {
 .state-connecting .connection-dot,
 .state-reconnecting .connection-dot {
   background: #c28f4d;
+  animation: status-pulse 1.2s ease-in-out infinite;
 }
 
 .state-streaming .connection-dot {
@@ -626,6 +628,11 @@ onBeforeUnmount(() => {
   color: #7b614b;
   font-size: 12px;
   font-weight: 700;
+  transition: transform 120ms ease, background-color 160ms ease;
+}
+
+.connection-retry:active {
+  transform: scale(0.97);
 }
 
 .message-stream {
@@ -893,6 +900,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.35;
   text-align: center;
+  backdrop-filter: blur(10px);
 }
 
 .chat-skeleton {
@@ -1017,6 +1025,28 @@ onBeforeUnmount(() => {
   100% {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes banner-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
   }
 }
 </style>

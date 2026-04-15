@@ -289,6 +289,7 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   background: rgba(255, 252, 248, 0.88);
   box-shadow: 0 8px 18px rgba(120, 101, 84, 0.04);
+  backdrop-filter: blur(14px);
 }
 
 .workspace-copy {
@@ -344,6 +345,20 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, rgba(255, 248, 241, 0.98), rgba(247, 239, 231, 0.94));
   box-shadow: 0 14px 30px rgba(120, 101, 84, 0.08);
   padding: 16px 16px 15px;
+  position: relative;
+  overflow: hidden;
+}
+
+.continue-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.38), rgba(255,255,255,0));
+  pointer-events: none;
+}
+
+.continue-card:active {
+  transform: scale(0.994);
 }
 
 .continue-copy {
@@ -437,6 +452,7 @@ onBeforeUnmount(() => {
   border-radius: 20px;
   background: linear-gradient(180deg, rgba(255, 251, 247, 0.98), rgba(247, 242, 237, 0.94));
   box-shadow: 0 12px 30px rgba(120, 101, 84, 0.05);
+  backdrop-filter: blur(12px);
 }
 
 .group-action-popover {
@@ -668,6 +684,9 @@ onBeforeUnmount(() => {
 .session-row.pending {
   border-color: rgba(196, 178, 160, 0.4);
   background: linear-gradient(180deg, rgba(251, 247, 242, 0.95), rgba(255, 252, 248, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 8px 18px rgba(146, 126, 108, 0.05);
 }
 
 .session-row-body {
@@ -723,6 +742,10 @@ onBeforeUnmount(() => {
   line-height: 1.2;
   padding: 12px 14px;
   box-shadow: 0 10px 24px rgba(120, 101, 84, 0.05);
+}
+
+.load-more-btn:active {
+  transform: scale(0.986);
 }
 
 .load-more-btn:disabled {
