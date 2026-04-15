@@ -32,6 +32,17 @@ const TOKEN_STORAGE_KEY = "codex-web-terminal.saved-token";
 let autoLoginTried = false;
 let replaySuppressionLines = new Set();
 let submitFallbackTimer = null;
+let reconnectTimer = null;
+let lastHomeVisibleRefreshAt = 0;
+
+const CONNECTION_IDLE = "idle";
+const CONNECTION_CONNECTING = "connecting";
+const CONNECTION_SENDING = "sending";
+const CONNECTION_STREAMING = "streaming";
+const CONNECTION_RECONNECTING = "reconnecting";
+const CONNECTION_DISCONNECTED = "disconnected";
+const MAX_RECONNECT_ATTEMPTS = 3;
+const HOME_REFRESH_COOLDOWN_MS = 1500;
 
 const LIVE_BOOTSTRAP_LINE_PATTERNS = [
   /^[╭╰│─]+$/,
@@ -80,6 +91,9 @@ const state = reactive({
   activeMessages: [],
   activeSocket: null,
   activeStreamBuffer: "",
+  connectionState: CONNECTION_IDLE,
+  reconnectAttempts: 0,
+  reconnectInFlight: false,
   pendingSessionId: "",
   activeSessionOpenToken: 0,
   replayGuardActive: false,
@@ -221,6 +235,25 @@ const showSharedThreadHint = computed(() => {
   }
   return Boolean(state.activeLiveSessionId) && activeThreadId.value === expectedThreadId.value;
 });
+const connectionLabel = computed(() => {
+  switch (state.connectionState) {
+    case CONNECTION_CONNECTING:
+      return "正在连接";
+    case CONNECTION_SENDING:
+      return "消息已发送，等待响应";
+    case CONNECTION_STREAMING:
+      return "正在接收回复";
+    case CONNECTION_RECONNECTING:
+      return "正在恢复连接";
+    case CONNECTION_DISCONNECTED:
+      return "连接已断开";
+    default:
+      return "";
+  }
+});
+const canReconnectActiveSession = computed(() => {
+  return Boolean(state.activeLiveSessionId) && state.connectionState === CONNECTION_DISCONNECTED;
+});
 const canSend = computed(() => Boolean(composerDraft.value.trim()));
 const canInterrupt = computed(() => {
   const socketReady =
@@ -252,6 +285,23 @@ function clearSubmitFallbackTimer() {
     window.clearTimeout(submitFallbackTimer);
     submitFallbackTimer = null;
   }
+}
+
+function setConnectionState(nextState) {
+  state.connectionState = nextState || CONNECTION_IDLE;
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function resetConnectionRecovery() {
+  clearReconnectTimer();
+  state.reconnectAttempts = 0;
+  state.reconnectInFlight = false;
 }
 
 function toFriendlyLoginError(error) {
@@ -408,6 +458,9 @@ function finalizeAssistantStream() {
     state.activeMessages = messages;
   }
   state.activeStreamBuffer = "";
+  if (state.activeLiveSessionId && state.connectionState === CONNECTION_STREAMING) {
+    setConnectionState(CONNECTION_CONNECTED);
+  }
 }
 
 function discardPendingAssistantStream() {
@@ -831,8 +884,10 @@ async function handleLogin({ silent = false, auto = false } = {}) {
 }
 
 function closeSocket() {
+  clearReconnectTimer();
   clearSubmitFallbackTimer();
   if (state.activeSocket) {
+    state.activeSocket.__expectedClose = true;
     state.activeSocket.close();
     state.activeSocket = null;
   }
@@ -877,13 +932,87 @@ function waitForSocketOpen(socket, timeoutMs = 4000) {
   });
 }
 
-function attachLiveSocket(sessionId, historyMessages = []) {
+function shouldAutoReconnectSocket(socket) {
+  if (!socket || socket.__expectedClose) {
+    return false;
+  }
+  if (route.name !== "chat") {
+    return false;
+  }
+  if (!state.activeLiveSessionId || !state.activeSessionMeta) {
+    return false;
+  }
+  return (
+    state.activeSessionMeta.kind === "live" &&
+    String(socket.__sessionId || "").trim() === String(state.activeLiveSessionId || "").trim()
+  );
+}
+
+async function reconnectActiveSocket({ immediate = false } = {}) {
+  if (!state.activeLiveSessionId || state.reconnectInFlight) {
+    return;
+  }
+
+  clearReconnectTimer();
+  state.reconnectInFlight = true;
+  state.reconnectAttempts += 1;
+  setConnectionState(CONNECTION_RECONNECTING);
+  setStatus("正在恢复连接…");
+
+  try {
+    await attachLiveSocket(state.activeLiveSessionId, state.activeMessages, { reconnecting: true });
+    resetConnectionRecovery();
+    setConnectionState(CONNECTION_CONNECTED);
+    if (state.loading) {
+      setConnectionState(CONNECTION_SENDING);
+      setStatus("等待 Codex 回复…");
+    } else if (!String(state.activeStreamBuffer || "").trim()) {
+      setStatus("");
+    }
+  } catch (error) {
+    if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      state.reconnectInFlight = false;
+      setConnectionState(CONNECTION_DISCONNECTED);
+      setStatus(error?.message || "连接已断开，请重试。");
+      return;
+    }
+    const delay = immediate ? 480 : Math.min(3200, 600 * 2 ** (state.reconnectAttempts - 1));
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      reconnectActiveSocket();
+    }, delay);
+  } finally {
+    if (state.connectionState !== CONNECTION_DISCONNECTED) {
+      state.reconnectInFlight = false;
+    }
+  }
+}
+
+function scheduleSocketReconnect() {
+  if (state.reconnectInFlight || reconnectTimer || !state.activeLiveSessionId) {
+    return;
+  }
+  setConnectionState(CONNECTION_RECONNECTING);
+  setStatus("正在恢复连接…");
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    reconnectActiveSocket();
+  }, 480);
+}
+
+function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = false } = {}) {
   closeSocket();
   finalizeAssistantStream();
   state.activeLiveSessionId = sessionId;
   state.activeStreamBuffer = "";
   const socket = new WebSocket(resolveWsUrl(sessionId));
+  socket.__expectedClose = false;
+  socket.__sessionId = sessionId;
   state.activeSocket = socket;
+  if (!reconnecting) {
+    resetConnectionRecovery();
+  }
+  setConnectionState(reconnecting ? CONNECTION_RECONNECTING : CONNECTION_CONNECTING);
 
   socket.addEventListener("message", (event) => {
     let payload;
@@ -944,6 +1073,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
     if (payload.type === "data") {
       if (payload.data && String(payload.data).trim()) {
         clearPendingReplyStatus();
+        setConnectionState(CONNECTION_STREAMING);
       }
       appendNormalizedParts(normalizeServerPayload(payload, state.activeSessionId));
       return;
@@ -952,6 +1082,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
     if (payload.type === "message_part") {
       if (payload?.part?.type === "text" && String(payload?.part?.text || "").trim()) {
         clearPendingReplyStatus();
+        setConnectionState(CONNECTION_STREAMING);
       }
       appendNormalizedParts(normalizeServerPayload(payload, state.activeSessionId));
       return;
@@ -965,6 +1096,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
     if (payload.type === "error") {
       const errorText = String(payload.error || "会话发生未知错误。").trim();
       clearPendingReplyStatus();
+      setConnectionState(CONNECTION_DISCONNECTED);
       appendNormalizedParts([
         {
           role: "system",
@@ -982,6 +1114,7 @@ function attachLiveSocket(sessionId, historyMessages = []) {
 
     if (payload.type === "exit") {
       finalizeAssistantStream();
+      setConnectionState(CONNECTION_CONNECTED);
       const exitCode = Number(payload.exitCode ?? 0);
       if (state.statusText === "已发送中断指令。") {
         setStatus("当前流程已中断。");
@@ -1002,22 +1135,39 @@ function attachLiveSocket(sessionId, historyMessages = []) {
       state.activeSocket = null;
     }
     finalizeAssistantStream();
+    if (socket.__expectedClose) {
+      return;
+    }
     if (state.statusText === "已发送中断指令。") {
+      resetConnectionRecovery();
+      setConnectionState(CONNECTION_CONNECTED);
       setStatus("当前流程已中断。");
       return;
     }
+    if (shouldAutoReconnectSocket(socket)) {
+      scheduleSocketReconnect();
+      return;
+    }
+    setConnectionState(CONNECTION_DISCONNECTED);
     if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
-      setStatus("会话连接已关闭，请重试一次。");
+      setStatus("连接已断开，请重试。");
     }
   });
 
   socket.addEventListener("error", () => {
+    if (shouldAutoReconnectSocket(socket)) {
+      scheduleSocketReconnect();
+      return;
+    }
+    setConnectionState(CONNECTION_DISCONNECTED);
     if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
-      setStatus("会话连接失败，请重试一次。");
+      setStatus("连接失败，请重试。");
     }
   });
 
-  return waitForSocketOpen(socket);
+  return waitForSocketOpen(socket).then(() => {
+    setConnectionState(CONNECTION_CONNECTED);
+  });
 }
 
 async function openLiveSession(session, { skipRoute = false } = {}) {
@@ -1070,6 +1220,8 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
 
 async function openHistoricalSession(session, { skipRoute = false } = {}) {
   closeSocket();
+  resetConnectionRecovery();
+  setConnectionState(CONNECTION_IDLE);
   finalizeAssistantStream();
   state.pendingSessionId = session.id;
   state.viewLoading = true;
@@ -1290,6 +1442,7 @@ async function submitInput() {
 
   try {
     state.loading = true;
+    setConnectionState(CONNECTION_SENDING);
     setStatus("正在发送…");
     if (expectedThreadId.value && activeThreadId.value && expectedThreadId.value !== activeThreadId.value) {
       throw new Error(
@@ -1319,6 +1472,9 @@ async function submitInput() {
     composerDraft.value = "";
     setStatus("等待 Codex 回复…");
   } catch (error) {
+    if (state.activeLiveSessionId) {
+      setConnectionState(CONNECTION_DISCONNECTED);
+    }
     setStatus(error.message || String(error));
   } finally {
     state.loading = false;
@@ -1340,9 +1496,64 @@ function interruptActiveSession() {
   }
 }
 
+async function handleManualReconnect() {
+  if (!state.activeLiveSessionId) {
+    return;
+  }
+  state.reconnectAttempts = 0;
+  try {
+    await reconnectActiveSocket({ immediate: true });
+  } catch (error) {
+    setStatus(error?.message || String(error));
+  }
+}
+
+async function handleVisibilityRecovery() {
+  if (!state.isAuthenticated || typeof document === "undefined" || document.visibilityState !== "visible") {
+    return;
+  }
+
+  if (route.name === "sessions") {
+    const now = Date.now();
+    if (now - lastHomeVisibleRefreshAt < HOME_REFRESH_COOLDOWN_MS) {
+      return;
+    }
+    lastHomeVisibleRefreshAt = now;
+    try {
+      await refreshSessions();
+    } catch (error) {
+      setStatus(error?.message || String(error));
+    }
+    return;
+  }
+
+  if (
+    route.name === "chat" &&
+    state.activeLiveSessionId &&
+    (!state.activeSocket || state.activeSocket.readyState !== WebSocket.OPEN)
+  ) {
+    state.reconnectAttempts = 0;
+    await reconnectActiveSocket({ immediate: true });
+  }
+}
+
+function handleVisibilityChange() {
+  handleVisibilityRecovery().catch((error) => {
+    setStatus(error?.message || String(error));
+  });
+}
+
+function handleBrowserOnline() {
+  handleVisibilityRecovery().catch((error) => {
+    setStatus(error?.message || String(error));
+  });
+}
+
 async function backToList() {
   clearSubmitFallbackTimer();
   closeSocket();
+  resetConnectionRecovery();
+  setConnectionState(CONNECTION_IDLE);
   finalizeAssistantStream();
   state.replayGuardActive = false;
   state.replayGuardPrompt = "";
@@ -1372,6 +1583,8 @@ watch(
   async (name) => {
     if (name === "sessions") {
       closeSocket();
+      resetConnectionRecovery();
+      setConnectionState(CONNECTION_IDLE);
       finalizeAssistantStream();
       if (state.isAuthenticated) {
         try {
@@ -1479,6 +1692,12 @@ watch(
 );
 
 onMounted(async () => {
+  if (typeof window !== "undefined") {
+    window.addEventListener("online", handleBrowserOnline, { passive: true });
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
+  }
   try {
     const savedToken = getSavedToken();
     if (savedToken) {
@@ -1502,6 +1721,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   closeSocket();
+  resetConnectionRecovery();
+  if (typeof window !== "undefined") {
+    window.removeEventListener("online", handleBrowserOnline);
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }
 });
 
 if (typeof window !== 'undefined') {
@@ -1588,6 +1814,9 @@ if (typeof window !== 'undefined') {
         :expected-thread-id="expectedThreadId"
         :show-shared-thread-hint="showSharedThreadHint"
         :thread-mismatch="threadMismatch"
+        :connection-state="state.connectionState"
+        :connection-label="connectionLabel"
+        :can-reconnect="canReconnectActiveSession"
         :workspace-name="activeWorkspaceName"
         :assistant-name="activeAssistantName"
         :messages="state.activeMessages"
@@ -1599,6 +1828,7 @@ if (typeof window !== 'undefined') {
         :status-text="state.statusText"
         @back="backToList"
         @interrupt="interruptActiveSession"
+        @reconnect="handleManualReconnect"
         @submit="submitInput"
       />
 

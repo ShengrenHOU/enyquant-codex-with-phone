@@ -14,6 +14,9 @@ const props = defineProps({
   expectedThreadId: { type: String, default: "" },
   showSharedThreadHint: { type: Boolean, default: false },
   threadMismatch: { type: Boolean, default: false },
+  connectionState: { type: String, default: "idle" },
+  connectionLabel: { type: String, default: "" },
+  canReconnect: { type: Boolean, default: false },
   workspaceName: { type: String, default: "" },
   assistantName: { type: String, default: "Codex" },
   messages: { type: Array, default: () => [] },
@@ -25,7 +28,7 @@ const props = defineProps({
   statusText: { type: String, default: "" }
 });
 
-const emit = defineEmits(["back", "update:draft", "submit", "interrupt"]);
+const emit = defineEmits(["back", "update:draft", "submit", "interrupt", "reconnect"]);
 const messageListEl = ref(null);
 const composerEl = ref(null);
 const viewportHeight = ref(0);
@@ -38,6 +41,7 @@ const chatShellStyle = computed(() => ({
   "--chat-vh": viewportHeight.value ? `${viewportHeight.value}px` : undefined,
   "--chat-keyboard-inset": `${keyboardInset.value}px`
 }));
+const showConnectionBanner = computed(() => Boolean(props.connectionLabel));
 const isRunning = computed(() => Boolean(props.canInterrupt));
 const primaryActionLabel = computed(() => (isRunning.value ? "中断" : "发送"));
 const canPrimaryAction = computed(() => (isRunning.value ? !props.loading : props.canSend && !props.loading));
@@ -382,6 +386,23 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="chat-screen">
+      <div
+        v-if="showConnectionBanner"
+        class="connection-banner"
+        :class="`state-${connectionState}`"
+      >
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span class="connection-label">{{ connectionLabel }}</span>
+        <button
+          v-if="canReconnect"
+          type="button"
+          class="connection-retry"
+          @click="emit('reconnect')"
+        >
+          重新连接
+        </button>
+      </div>
+
       <section ref="messageListEl" class="message-stream" @scroll="handleStreamScroll">
         <div v-if="showSharedThreadHint" class="thread-hint">
           已写入共享 thread。若桌面 Codex App 没刷新，重新进入该会话即可看到更新。
@@ -535,6 +556,72 @@ onBeforeUnmount(() => {
   min-height: calc(100dvh - 72px);
   min-width: 0;
   overflow-x: hidden;
+}
+
+.connection-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 14px 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(206, 195, 185, 0.72);
+  background: rgba(255, 251, 247, 0.88);
+  color: rgba(78, 66, 56, 0.94);
+  box-shadow: 0 8px 20px rgba(94, 77, 61, 0.05);
+  transition: opacity 160ms ease, transform 180ms ease, background-color 180ms ease;
+}
+
+.connection-banner.state-reconnecting,
+.connection-banner.state-connecting {
+  background: rgba(255, 248, 240, 0.92);
+}
+
+.connection-banner.state-streaming {
+  background: rgba(246, 251, 247, 0.9);
+}
+
+.connection-banner.state-disconnected {
+  background: rgba(255, 244, 242, 0.94);
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(151, 136, 121, 0.92);
+  flex: 0 0 auto;
+}
+
+.state-connecting .connection-dot,
+.state-reconnecting .connection-dot {
+  background: #c28f4d;
+}
+
+.state-streaming .connection-dot {
+  background: #4d9b68;
+}
+
+.state-disconnected .connection-dot {
+  background: #d15e4a;
+}
+
+.connection-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.connection-retry {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(166, 142, 120, 0.12);
+  color: #7b614b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .message-stream {
