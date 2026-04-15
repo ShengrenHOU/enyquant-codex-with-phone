@@ -1157,9 +1157,12 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
     }
 
     if (payload.type === "message_part") {
+      const partPhase = String(payload?.phase || "").trim().toLowerCase();
       if (payload?.part?.type === "text" && String(payload?.part?.text || "").trim()) {
         clearPendingReplyStatus();
-        setConnectionState(CONNECTION_STREAMING);
+        if (partPhase === "streaming" || !partPhase) {
+          setConnectionState(CONNECTION_STREAMING);
+        }
       }
       appendNormalizedParts(normalizeServerPayload(payload, state.activeSessionId));
       return;
