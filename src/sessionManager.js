@@ -1824,13 +1824,7 @@ export class SessionManager {
     try {
       const result = await this.appServerBridge.startTurn(session, prompt);
       this.handleAppServerTurnResult(session, result);
-      session.turnRunning = false;
-      session.updatedAt = nowIso();
-      this.broadcastTurnStatus(session, "completed", {
-        hadVisibleOutput: session.turnHadVisibleOutput
-      });
       this.broadcast(session, { type: "session_updated", session: this.serialize(session) });
-      this.maybeStartAppServerTurn(session);
     } catch (error) {
       session.turnRunning = false;
       session.updatedAt = nowIso();
@@ -2091,9 +2085,16 @@ export class SessionManager {
         continue;
       }
       if (method === "turn/completed" || normalizedMethod === "turncompleted") {
+        session.turnRunning = false;
+        session.updatedAt = nowIso();
         if (!session.turnHadVisibleOutput) {
           emitNoReplyFallback(this, session);
         }
+        this.broadcastTurnStatus(session, "completed", {
+          hadVisibleOutput: session.turnHadVisibleOutput
+        });
+        this.broadcast(session, { type: "session_updated", session: this.serialize(session) });
+        this.maybeStartAppServerTurn(session);
         continue;
       }
       if (method === "thread/status/changed" || normalizedMethod === "threadstatuschanged") {

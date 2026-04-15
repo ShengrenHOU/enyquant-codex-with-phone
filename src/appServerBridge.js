@@ -28,6 +28,7 @@ export class AppServerBridge extends EventEmitter {
     this.pending = new Map();
     this.connecting = null;
     this.shuttingDown = false;
+    this.ownsProcess = false;
   }
 
   async ensureReady() {
@@ -49,8 +50,13 @@ export class AppServerBridge extends EventEmitter {
   }
 
   async connectInternal() {
-    await this.startProcess();
-    await this.openWebSocket();
+    try {
+      await this.openWebSocket();
+    } catch {
+      this.closeSocket();
+      await this.startProcess();
+      await this.openWebSocket();
+    }
     await this.request("initialize", {
       clientInfo: {
         name: "codex-cc-web-terminal",
@@ -68,16 +74,8 @@ export class AppServerBridge extends EventEmitter {
     if (this.proc && !this.proc.killed) {
       return;
     }
+    this.ownsProcess = true;
     const args = ["app-server", "--listen", this.listenUrl];
-    if (String(this.config.mobileCodexProfile || "").trim()) {
-      args.push("--profile", String(this.config.mobileCodexProfile).trim());
-    }
-    if (this.config.mobileCodexFullAccess) {
-      args.push("--dangerously-bypass-approvals-and-sandbox");
-    }
-    if (Array.isArray(this.config.mobileCodexExtraArgs) && this.config.mobileCodexExtraArgs.length > 0) {
-      args.push(...this.config.mobileCodexExtraArgs);
-    }
     this.proc = spawnCodexProcess(this.config.codexBin, args, {
       cwd: this.config.root,
       env: process.env,
@@ -90,15 +88,20 @@ export class AppServerBridge extends EventEmitter {
       }
     });
     this.proc.on("exit", () => {
-      this.connected = false;
-      this.initialized = false;
-      this.ws = null;
+      if (this.ownsProcess) {
+        this.connected = false;
+        this.initialized = false;
+        this.ws = null;
+      }
+      this.proc = null;
+      this.ownsProcess = false;
     });
     await wait(350);
   }
 
   async openWebSocket() {
     const url = this.listenUrl;
+    this.closeSocket();
     this.ws = new WebSocket(url);
     const connectTimeoutMs = Math.max(1_000, Number(this.config.codexAppServerConnectTimeoutMs) || 5_000);
     await new Promise((resolve, reject) => {
@@ -118,6 +121,18 @@ export class AppServerBridge extends EventEmitter {
       this.connected = false;
       this.initialized = false;
     });
+  }
+
+  closeSocket() {
+    if (!this.ws) {
+      return;
+    }
+    try {
+      this.ws.close();
+    } catch {
+      // no-op
+    }
+    this.ws = null;
   }
 
   handleMessage(raw) {
@@ -272,16 +287,20 @@ export class AppServerBridge extends EventEmitter {
   async shutdown() {
     this.shuttingDown = true;
     try {
-      this.ws?.close();
+      this.closeSocket();
     } catch {
       // no-op
     }
     try {
-      this.proc?.kill("SIGTERM");
+      if (this.ownsProcess) {
+        this.proc?.kill("SIGTERM");
+      }
     } catch {
       // no-op
     }
     this.connected = false;
     this.initialized = false;
+    this.proc = null;
+    this.ownsProcess = false;
   }
 }
