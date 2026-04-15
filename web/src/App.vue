@@ -43,6 +43,7 @@ const CONNECTION_RECONNECTING = "reconnecting";
 const CONNECTION_DISCONNECTED = "disconnected";
 const MAX_RECONNECT_ATTEMPTS = 3;
 const HOME_REFRESH_COOLDOWN_MS = 1500;
+const WAITING_STATUS_TEXTS = new Set(["等待 Codex 回复…", "等待首个响应…", "Codex 正在思考…", "上下文较重，仍在准备首个响应…", "正在发送…"]);
 
 const LIVE_BOOTSTRAP_LINE_PATTERNS = [
   /^[╭╰│─]+$/,
@@ -240,7 +241,7 @@ const connectionLabel = computed(() => {
     case CONNECTION_CONNECTING:
       return "正在连接";
     case CONNECTION_SENDING:
-      return "消息已发送，等待响应";
+      return state.statusText && WAITING_STATUS_TEXTS.has(state.statusText) ? state.statusText : "消息已发送，等待响应";
     case CONNECTION_STREAMING:
       return "正在接收回复";
     case CONNECTION_RECONNECTING:
@@ -285,6 +286,23 @@ function clearSubmitFallbackTimer() {
     window.clearTimeout(submitFallbackTimer);
     submitFallbackTimer = null;
   }
+}
+
+function schedulePendingReplyProgression() {
+  clearSubmitFallbackTimer();
+  submitFallbackTimer = window.setTimeout(() => {
+    if (state.connectionState !== CONNECTION_SENDING || state.statusText !== "等待首个响应…") {
+      submitFallbackTimer = null;
+      return;
+    }
+    setStatus("Codex 正在思考…");
+    submitFallbackTimer = window.setTimeout(() => {
+      if (state.connectionState === CONNECTION_SENDING && state.statusText === "Codex 正在思考…") {
+        setStatus("上下文较重，仍在准备首个响应…");
+      }
+      submitFallbackTimer = null;
+    }, 2600);
+  }, 1200);
 }
 
 function setConnectionState(nextState) {
@@ -643,7 +661,7 @@ function appendNormalizedParts(parts = []) {
 }
 
 function clearPendingReplyStatus() {
-  if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
+  if (WAITING_STATUS_TEXTS.has(state.statusText)) {
     setStatus("");
   }
 }
@@ -1149,7 +1167,7 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
       return;
     }
     setConnectionState(CONNECTION_DISCONNECTED);
-    if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
+    if (WAITING_STATUS_TEXTS.has(state.statusText)) {
       setStatus("连接已断开，请重试。");
     }
   });
@@ -1160,7 +1178,7 @@ function attachLiveSocket(sessionId, historyMessages = [], { reconnecting = fals
       return;
     }
     setConnectionState(CONNECTION_DISCONNECTED);
-    if (state.statusText === "等待 Codex 回复…" || state.statusText === "正在发送…") {
+    if (WAITING_STATUS_TEXTS.has(state.statusText)) {
       setStatus("连接失败，请重试。");
     }
   });
@@ -1186,28 +1204,30 @@ async function openLiveSession(session, { skipRoute = false } = {}) {
     state.replayGuardActive = false;
     state.replayGuardPrompt = "";
     state.replayGuardUntil = 0;
-    // Refresh auth/config before WebSocket connect to avoid stale cookie + fresh process mismatch.
-    await bootstrapWorkspace({ includeSessions: false });
-    let historyMessages = [];
-    if (session.resumeSessionId) {
-      const hydrated = await hydrateSession(
-        {
-          ...session,
-          id: `history:${session.provider}:${session.resumeSessionId}`,
-          kind: "history",
-          status: "saved"
-        },
-        { includeMessages: true, silent: true }
-      );
-      historyMessages = hydrated?.messages || [];
-      if (hydrated?.session) {
-        state.activeSessionMeta = {
-          ...state.activeSessionMeta,
-          displayTitle: hydrated.title || state.activeSessionMeta.displayTitle,
-          displayPreview: hydrated.preview || state.activeSessionMeta.displayPreview,
-          cwd: hydrated.session.cwd || state.activeSessionMeta.cwd || ""
-        };
-      }
+    const hydratePromise = session.resumeSessionId
+      ? hydrateSession(
+          {
+            ...session,
+            id: `history:${session.provider}:${session.resumeSessionId}`,
+            kind: "history",
+            status: "saved"
+          },
+          { includeMessages: true, silent: true }
+        )
+      : Promise.resolve(null);
+    const bootstrapPromise =
+      state.backendHttpOrigin && state.backendWsOrigin
+        ? Promise.resolve()
+        : bootstrapWorkspace({ includeSessions: false });
+    const [, hydrated] = await Promise.all([bootstrapPromise, hydratePromise]);
+    const historyMessages = hydrated?.messages || [];
+    if (hydrated?.session) {
+      state.activeSessionMeta = {
+        ...state.activeSessionMeta,
+        displayTitle: hydrated.title || state.activeSessionMeta.displayTitle,
+        displayPreview: hydrated.preview || state.activeSessionMeta.displayPreview,
+        cwd: hydrated.session.cwd || state.activeSessionMeta.cwd || ""
+      };
     }
     setMessages(historyMessages);
     await attachLiveSocket(session.id, historyMessages);
@@ -1414,14 +1434,11 @@ async function ensureLiveSession() {
     updatedAt: resumed.session.updatedAt
   };
   state.activeLiveSessionId = resumed.session.id;
-  await refreshSessions();
+  refreshSessions().catch(() => {});
   await attachLiveSocket(resumed.session.id, state.activeMessages);
-  setStatus("正在恢复会话上下文…");
+  setStatus("共享会话已连接，准备发送…");
   state.replayGuardActive = true;
-  state.replayGuardUntil = Date.now() + 20_000;
-  await wait(1800);
-  discardPendingAssistantStream();
-  state.activeStreamBuffer = "";
+  state.replayGuardUntil = Date.now() + 12_000;
   return resumed.session.id;
 }
 
@@ -1470,7 +1487,8 @@ async function submitInput() {
       createMessage("user", text, new Date().toISOString(), { source: "draft" })
     ]);
     composerDraft.value = "";
-    setStatus("等待 Codex 回复…");
+    setStatus("等待首个响应…");
+    schedulePendingReplyProgression();
   } catch (error) {
     if (state.activeLiveSessionId) {
       setConnectionState(CONNECTION_DISCONNECTED);
