@@ -37,6 +37,7 @@ let lastHomeVisibleRefreshAt = 0;
 
 const CONNECTION_IDLE = "idle";
 const CONNECTION_CONNECTING = "connecting";
+const CONNECTION_CONNECTED = "connected";
 const CONNECTION_SENDING = "sending";
 const CONNECTION_STREAMING = "streaming";
 const CONNECTION_RECONNECTING = "reconnecting";
@@ -519,7 +520,7 @@ function handleTurnStatus(payload = {}) {
     state.turnCompletedAt = Date.now();
     clearSubmitFallbackTimer();
     finalizeAssistantStream();
-    if (state.connectionState !== CONNECTION_DISCONNECTED && state.connectionState !== CONNECTION_RECONNECTING) {
+    if (state.connectionState !== CONNECTION_DISCONNECTED) {
       setConnectionState(CONNECTION_CONNECTED);
     }
     if (state.statusText === "已发送中断指令。") {
