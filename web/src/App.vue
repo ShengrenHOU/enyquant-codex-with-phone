@@ -34,6 +34,8 @@ let replaySuppressionLines = new Set();
 let submitFallbackTimer = null;
 let reconnectTimer = null;
 let lastHomeVisibleRefreshAt = 0;
+const notificationPermission = ref(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+const notifiedAttentionKeys = new Set();
 
 const CONNECTION_IDLE = "idle";
 const CONNECTION_CONNECTING = "connecting";
@@ -154,9 +156,70 @@ function decorateSession(session) {
   };
 }
 
-const continueSessionItem = computed(() => (state.continueSession ? decorateSession(state.continueSession) : null));
+const continueSessionItem = computed(() => (state.continueSession ? decorateHomeSession(state.continueSession) : null));
 const defaultCreateWorkspaceName = computed(() => workspaceName(state.createTargetCwd || state.defaultCreateCwd || ""));
 const canSubmitCreate = computed(() => state.pendingSessionId !== "__creating__");
+
+function statusMetaForSession(session) {
+  const attentionKind = String(session?.attentionKind || "").trim();
+  if (attentionKind === "permission") {
+    return { key: "permission", label: "等待权限", tone: "warning" };
+  }
+  if (attentionKind === "error" || attentionKind === "needs_attention") {
+    return { key: "attention", label: "需要处理", tone: "danger" };
+  }
+  if (session?.turnRunning) {
+    return { key: "running", label: "运行中", tone: "success" };
+  }
+  if (attentionKind === "completed") {
+    return { key: "completed", label: "刚完成", tone: "neutral" };
+  }
+  if (session?.kind === "live" && session?.status !== "exited") {
+    return { key: "online", label: "在线", tone: "neutral" };
+  }
+  return { key: "", label: "", tone: "neutral" };
+}
+
+function decorateHomeSession(session) {
+  const decorated = decorateSession(session);
+  const status = statusMetaForSession(session);
+  return {
+    ...decorated,
+    statusKey: status.key,
+    statusLabel: status.label,
+    statusTone: status.tone
+  };
+}
+
+const homeSessions = computed(() =>
+  mergeSessionsById(state.liveSessions, state.sessions).filter(
+    (session) => !state.continueSession || session.id !== state.continueSession.id
+  )
+);
+
+const attentionItems = computed(() => {
+  const all = [state.continueSession, ...homeSessions.value]
+    .filter(Boolean)
+    .filter((session, index, items) => items.findIndex((candidate) => candidate.id === session.id) === index)
+    .map((session) => {
+      const meta = statusMetaForSession(session);
+      return {
+        id: session.id,
+        title: decorateSession(session).displayTitle,
+        subtitle: session.attentionMessage || decorateSession(session).displayPreview,
+        updatedAt: session.attentionAt || session.lastTurnCompletedAt || session.updatedAt || "",
+        statusKey: meta.key,
+        statusLabel: meta.label,
+        tone: meta.tone,
+        session
+      };
+    })
+    .filter((item) => ["permission", "attention", "completed", "running"].includes(item.statusKey))
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  return all.slice(0, 5);
+});
+
+const normalizedNotificationPermission = computed(() => notificationPermission.value || "unsupported");
 
 function mergeSessionsById(existingSessions, incomingSessions) {
   const byId = new Map();
@@ -176,7 +239,10 @@ function mergeSessionsById(existingSessions, incomingSessions) {
 const groupedSessions = computed(() => {
   const sessionSorter = (left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt));
   const groups = new Map();
-  for (const session of state.sessions.map(decorateSession)) {
+  for (const session of homeSessions.value.map(decorateSession)) {
+    if (state.continueSession && session.id === state.continueSession.id) {
+      continue;
+    }
     if (String(session?.sessionType || "").trim().toLowerCase() === "subagent") {
       continue;
     }
@@ -190,7 +256,7 @@ const groupedSessions = computed(() => {
     .map(([name, sessions]) => ({
       name,
       cwd: sessions[0]?.cwd || "",
-      sessions: [...sessions].sort(sessionSorter)
+      sessions: [...sessions].sort(sessionSorter).map(decorateHomeSession)
     }))
     .sort((left, right) =>
       String(right.sessions[0]?.updatedAt || "").localeCompare(String(left.sessions[0]?.updatedAt || ""))
@@ -336,6 +402,47 @@ function resetConnectionRecovery() {
   clearReconnectTimer();
   state.reconnectAttempts = 0;
   state.reconnectInFlight = false;
+}
+
+async function requestBrowserNotifications() {
+  if (typeof Notification === "undefined") {
+    notificationPermission.value = "unsupported";
+    return;
+  }
+  notificationPermission.value = await Notification.requestPermission();
+}
+
+function maybeNotifyAttentionItem(item) {
+  if (typeof Notification === "undefined" || notificationPermission.value !== "granted" || !item) {
+    return;
+  }
+  const key = `${item.id}:${item.statusKey}:${item.updatedAt}`;
+  if (notifiedAttentionKeys.has(key)) {
+    return;
+  }
+  notifiedAttentionKeys.add(key);
+  const titlePrefix =
+    item.statusKey === "completed"
+      ? "本轮完成"
+      : item.statusKey === "permission"
+        ? "需要权限"
+        : item.statusKey === "running"
+          ? "会话运行中"
+          : "需要处理";
+  const body = [item.title, item.subtitle].filter(Boolean).join(" · ");
+  try {
+    const notification = new Notification(`${titlePrefix}：${item.statusLabel || item.title}`, {
+      body,
+      silent: item.statusKey === "running"
+    });
+    notification.onclick = () => {
+      window.focus?.();
+      openSessionItem(item.session);
+      notification.close();
+    };
+  } catch {
+    // Ignore notification API failures.
+  }
 }
 
 function toFriendlyLoginError(error) {
@@ -798,7 +905,7 @@ async function refreshSessions() {
     state.liveSessions = liveSessions;
     state.continueSession = continueSession;
     state.defaultCreateCwd = String(payload?.defaultCreateCwd || continueSession?.cwd || sessions[0]?.cwd || "").trim();
-    state.sessions = sessions;
+    state.sessions = mergeSessionsById(state.sessions, sessions);
     state.historyPage = {
       limit: Number(payload?.historyPage?.limit || 5),
       offset: Number(payload?.historyPage?.offset || 0),
@@ -1783,6 +1890,18 @@ watch(
   { immediate: true }
 );
 
+watch(
+  attentionItems,
+  (items) => {
+    for (const item of items) {
+      if (["completed", "attention", "permission"].includes(item.statusKey)) {
+        maybeNotifyAttentionItem(item);
+      }
+    }
+  },
+  { flush: "post" }
+);
+
 onMounted(async () => {
   if (typeof window !== "undefined") {
     window.addEventListener("online", handleBrowserOnline, { passive: true });
@@ -1857,6 +1976,7 @@ if (typeof window !== 'undefined') {
 
         <SessionListView
           :continue-session="continueSessionItem"
+          :attention-items="attentionItems"
           :groups="groupedSessions"
           :active-session-id="state.activeSessionId"
           :pending-session-id="state.pendingSessionId"
@@ -1864,10 +1984,12 @@ if (typeof window !== 'undefined') {
           :home-loading="state.homeLoading"
           :loading-more-history="state.loadingMoreHistory"
           :default-create-workspace-name="defaultCreateWorkspaceName"
+          :notification-permission="normalizedNotificationPermission"
           :format-relative-time="formatRelativeTime"
           @open="openSessionItem"
           @create-group-session="createSessionInGroup"
           @create-quick-session="createQuickSession"
+          @enable-notifications="requestBrowserNotifications"
           @load-more-history="loadMoreHistoricalSessions"
         />
 
