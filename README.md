@@ -138,6 +138,13 @@ http://<desktop-100.x.x.x>:3210/#/sessions
 
 7. Sign in with `ACCESS_TOKEN`.
 
+If you change phones:
+
+1. Install and sign into Tailscale on the new phone
+2. Open the same desktop Tailscale URL
+3. Enter the same `ACCESS_TOKEN`
+4. If the service was restarted and your token changed, read the current `.env` value on the desktop
+
 ## Mobile Fast Mode
 
 This project now supports a phone-first runtime default.
@@ -283,6 +290,27 @@ Health checks:
 - this repo now loads recent sessions first
 - older sessions are loaded on demand from the mobile session list
 - history messages default to the latest 3 messages for faster mobile hydration
+
+### What the home screen status means
+
+- `Running`: the session is actively working on the latest turn
+- `Just completed`: the latest turn finished recently
+- `Needs attention`: something finished without a useful reply or hit an error
+- `Waiting permission`: reserved for approval-required flows when supported
+
+The home screen also shows a lightweight attention section for the most important sessions to open next.
+
+### Browser notifications
+
+This project now supports lightweight browser notifications when the page is open and notification permission is granted.
+
+Current notification types:
+
+- turn completed
+- error / needs attention
+- permission-required style attention when available
+
+This is not a full background push system yet. It is the lightest local-first notification layer.
 
 ## License
 

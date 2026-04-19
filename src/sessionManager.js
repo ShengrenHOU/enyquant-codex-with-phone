@@ -290,6 +290,9 @@ function emitNoReplyFallback(manager, session) {
     return;
   }
   session.turnNoReplyNotified = true;
+  session.attentionKind = "needs_attention";
+  session.attentionMessage = "本轮未返回可展示文本。";
+  session.attentionAt = nowIso();
   manager.broadcast(session, {
     type: "message_part",
     role: "system",
@@ -1601,6 +1604,10 @@ export class SessionManager {
         turnNoReplyNotified: false,
         runningProcess: null,
         queuedInputs: [],
+        lastTurnCompletedAt: "",
+        attentionKind: "",
+        attentionMessage: "",
+        attentionAt: "",
         sessionType: "main",
         parentThreadId: "",
         agentRole: "",
@@ -1649,6 +1656,10 @@ export class SessionManager {
       extraArgs: codexRuntime.extraArgs || [],
       fullAccess: resolvedProvider.id === "codex" ? codexRuntime.fullAccess : this.config.ccFullAccess,
       titleSource: String(name || "").trim() ? "user_provided" : "auto_generated",
+      lastTurnCompletedAt: "",
+      attentionKind: "",
+      attentionMessage: "",
+      attentionAt: "",
       sessionType: "main",
       parentThreadId: "",
       agentRole: "",
@@ -1819,6 +1830,10 @@ export class SessionManager {
     session.turnRunning = true;
     session.turnHadVisibleOutput = false;
     session.turnNoReplyNotified = false;
+    session.lastTurnCompletedAt = "";
+    session.attentionKind = "";
+    session.attentionMessage = "";
+    session.attentionAt = "";
     session.updatedAt = nowIso();
     this.broadcastTurnStatus(session, "running");
     try {
@@ -1828,6 +1843,10 @@ export class SessionManager {
     } catch (error) {
       session.turnRunning = false;
       session.updatedAt = nowIso();
+      session.lastTurnCompletedAt = nowIso();
+      session.attentionKind = "error";
+      session.attentionMessage = `Codex app-server 执行失败：${error?.message || String(error)}`;
+      session.attentionAt = session.lastTurnCompletedAt;
       this.broadcastTurnStatus(session, "completed", {
         hadVisibleOutput: session.turnHadVisibleOutput,
         error: error?.message || String(error)
@@ -1891,6 +1910,11 @@ export class SessionManager {
       stdio: ["ignore", "pipe", "pipe"]
     });
     session.runningProcess = child;
+    session.turnRunning = true;
+    session.lastTurnCompletedAt = "";
+    session.attentionKind = "";
+    session.attentionMessage = "";
+    session.attentionAt = "";
     session.updatedAt = nowIso();
     this.broadcastTurnStatus(session, "running");
 
@@ -1933,7 +1957,9 @@ export class SessionManager {
         parseLine(stdoutBuffer.trim());
       }
       session.runningProcess = null;
+      session.turnRunning = false;
       session.updatedAt = nowIso();
+      session.lastTurnCompletedAt = nowIso();
       if (code && code !== 0) {
         const concise = String(stderrBuffer || "")
           .replace(/<[^>]+>/g, " ")
@@ -1947,6 +1973,9 @@ export class SessionManager {
           phase: "final",
           timestamp: nowIso()
         });
+        session.attentionKind = "error";
+        session.attentionMessage = concise ? `Codex 执行失败（exit=${code}）：${concise}` : `Codex 执行失败（exit=${code}）`;
+        session.attentionAt = session.lastTurnCompletedAt;
       } else if (!emittedAssistant) {
         const concise = String(stderrBuffer || "")
           .replace(/<[^>]+>/g, " ")
@@ -1960,6 +1989,13 @@ export class SessionManager {
           phase: "final",
           timestamp: nowIso()
         });
+        session.attentionKind = "needs_attention";
+        session.attentionMessage = concise ? `本轮无可展示回复：${concise}` : "本轮未返回可展示文本。";
+        session.attentionAt = session.lastTurnCompletedAt;
+      } else {
+        session.attentionKind = "completed";
+        session.attentionMessage = "本轮已完成";
+        session.attentionAt = session.lastTurnCompletedAt;
       }
       this.broadcastTurnStatus(session, "completed", {
         hadVisibleOutput: emittedAssistant,
@@ -2087,8 +2123,14 @@ export class SessionManager {
       if (method === "turn/completed" || normalizedMethod === "turncompleted") {
         session.turnRunning = false;
         session.updatedAt = nowIso();
+        session.lastTurnCompletedAt = nowIso();
         if (!session.turnHadVisibleOutput) {
           emitNoReplyFallback(this, session);
+        }
+        if (!session.attentionKind) {
+          session.attentionKind = session.turnHadVisibleOutput ? "completed" : "needs_attention";
+          session.attentionMessage = session.turnHadVisibleOutput ? "本轮已完成" : "本轮未返回可展示文本。";
+          session.attentionAt = session.lastTurnCompletedAt;
         }
         this.broadcastTurnStatus(session, "completed", {
           hadVisibleOutput: session.turnHadVisibleOutput
@@ -2226,6 +2268,11 @@ export class SessionManager {
       profile: session.profile || "",
       extraArgs: Array.isArray(session.extraArgs) ? [...session.extraArgs] : [],
       fullAccess: Boolean(session.fullAccess),
+      turnRunning: Boolean(session.turnRunning),
+      lastTurnCompletedAt: session.lastTurnCompletedAt || "",
+      attentionKind: session.attentionKind || "",
+      attentionMessage: session.attentionMessage || "",
+      attentionAt: session.attentionAt || "",
       titleSource: session.titleSource || "",
       sessionType: session.sessionType || "main",
       parentThreadId: session.parentThreadId || "",

@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch } from "vue";
 
 const props = defineProps({
   continueSession: { type: Object, default: null },
+  attentionItems: { type: Array, default: () => [] },
   groups: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: "" },
   pendingSessionId: { type: String, default: "" },
@@ -17,10 +18,11 @@ const props = defineProps({
   homeLoading: Boolean,
   loadingMoreHistory: Boolean,
   defaultCreateWorkspaceName: { type: String, default: "" },
+  notificationPermission: { type: String, default: "unsupported" },
   formatRelativeTime: { type: Function, required: true }
 });
 
-const emit = defineEmits(["open", "create-group-session", "create-quick-session", "load-more-history"]);
+const emit = defineEmits(["open", "create-group-session", "create-quick-session", "load-more-history", "enable-notifications"]);
 const expandedGroups = ref(new Set());
 const openMenuGroupName = ref("");
 const openMenuPoint = ref({ x: 0, y: 0 });
@@ -134,6 +136,9 @@ function menuStyle() {
 
 function continueSubtitle(session) {
   const parts = [];
+  if (session?.statusLabel) {
+    parts.push(session.statusLabel);
+  }
   if (session?.groupName) {
     parts.push(session.groupName);
   }
@@ -150,6 +155,16 @@ function groupSubtitle(group) {
   return latestText ? `最近 ${latestText}` : count ? `${count} 个会话` : "暂无更新时间";
 }
 
+function notificationCtaText() {
+  if (props.notificationPermission === "granted") {
+    return "通知已开启";
+  }
+  if (props.notificationPermission === "denied") {
+    return "通知被禁用";
+  }
+  return "开启通知";
+}
+
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", onGlobalPointerDown, true);
 }
@@ -164,6 +179,44 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="session-screen">
+    <section v-if="attentionItems.length || notificationPermission !== 'unsupported'" class="attention-center">
+      <div class="attention-head">
+        <div>
+          <p class="attention-kicker">待处理</p>
+          <h2 class="attention-title">先处理这些</h2>
+        </div>
+        <button
+          v-if="notificationPermission !== 'unsupported'"
+          type="button"
+          class="attention-action"
+          :disabled="notificationPermission === 'granted'"
+          @click="emit('enable-notifications')"
+        >
+          {{ notificationCtaText() }}
+        </button>
+      </div>
+
+      <div v-if="attentionItems.length" class="attention-list">
+        <button
+          v-for="item in attentionItems"
+          :key="`${item.id}:${item.statusKey}:${item.updatedAt}`"
+          type="button"
+          class="attention-row"
+          @click="emit('open', item.session)"
+        >
+          <div class="attention-row-copy">
+            <div class="attention-row-top">
+              <span class="session-status-chip" :class="`tone-${item.tone}`">{{ item.statusLabel }}</span>
+              <time class="attention-row-time">{{ formatRelativeTime(item.updatedAt) }}</time>
+            </div>
+            <p class="attention-row-title">{{ item.title }}</p>
+            <p v-if="item.subtitle" class="attention-row-subtitle">{{ item.subtitle }}</p>
+          </div>
+        </button>
+      </div>
+      <div v-else class="attention-empty">目前没有需要你马上处理的会话。</div>
+    </section>
+
     <section class="workspace-banner">
       <div class="workspace-copy">
         <p class="workspace-kicker">默认新会话</p>
@@ -182,6 +235,11 @@ onBeforeUnmount(() => {
     <section v-if="continueSession" class="continue-card">
       <div class="continue-copy">
         <p class="continue-kicker">继续最近会话</p>
+        <div v-if="continueSession.statusLabel" class="continue-status-row">
+          <span class="session-status-chip" :class="`tone-${continueSession.statusTone || 'neutral'}`">
+            {{ continueSession.statusLabel }}
+          </span>
+        </div>
         <h2 class="continue-title">{{ continueSession.displayTitle }}</h2>
         <p class="continue-subtitle">{{ continueSubtitle(continueSession) }}</p>
       </div>
@@ -234,8 +292,15 @@ onBeforeUnmount(() => {
             @click="emit('open', session)"
           >
             <div class="session-row-body">
-              <p class="session-row-title">{{ session.displayTitle }}</p>
-              <time class="session-row-time">{{ formatRelativeTime(session.updatedAt) }}</time>
+              <div class="session-row-main">
+                <div class="session-row-top">
+                  <span v-if="session.statusLabel" class="session-status-chip" :class="`tone-${session.statusTone || 'neutral'}`">
+                    {{ session.statusLabel }}
+                  </span>
+                  <time class="session-row-time">{{ formatRelativeTime(session.updatedAt) }}</time>
+                </div>
+                <p class="session-row-title">{{ session.displayTitle }}</p>
+              </div>
             </div>
           </button>
         </div>
@@ -277,6 +342,115 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-width: 0;
   padding: 12px 12px 18px;
+}
+
+.attention-center {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(205, 194, 183, 0.7);
+  border-radius: 18px;
+  background: rgba(255, 251, 247, 0.88);
+  box-shadow: 0 8px 18px rgba(120, 101, 84, 0.04);
+  backdrop-filter: blur(14px);
+}
+
+.attention-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.attention-kicker {
+  margin: 0 0 4px;
+  color: rgba(142, 118, 95, 0.92);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.attention-title {
+  margin: 0;
+  color: rgba(56, 47, 39, 0.98);
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.attention-action {
+  flex: 0 0 auto;
+  min-width: 88px;
+  border: 1px solid rgba(202, 190, 178, 0.82);
+  border-radius: 14px;
+  background: rgba(255, 253, 250, 0.94);
+  color: rgba(91, 77, 63, 0.96);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 10px 12px;
+}
+
+.attention-action:disabled {
+  opacity: 0.58;
+}
+
+.attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-row {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid rgba(208, 197, 187, 0.54);
+  border-radius: 15px;
+  background: rgba(255, 252, 249, 0.82);
+  text-align: left;
+}
+
+.attention-row-copy {
+  min-width: 0;
+}
+
+.attention-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.attention-row-time {
+  flex: 0 0 auto;
+  color: rgba(142, 126, 113, 0.94);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.attention-row-title {
+  margin: 0;
+  color: rgba(58, 50, 42, 0.94);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.attention-row-subtitle {
+  margin: 5px 0 0;
+  color: rgba(132, 117, 104, 0.94);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.attention-empty {
+  color: rgba(142, 126, 113, 0.92);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .workspace-banner {
@@ -366,6 +540,10 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
+.continue-status-row {
+  margin: 0 0 8px;
+}
+
 .continue-kicker {
   margin: 0 0 6px;
   color: rgba(142, 118, 95, 0.96);
@@ -373,6 +551,39 @@ onBeforeUnmount(() => {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.session-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.session-status-chip.tone-success {
+  background: rgba(84, 170, 109, 0.14);
+  color: #317248;
+}
+
+.session-status-chip.tone-danger {
+  background: rgba(214, 102, 88, 0.14);
+  color: #9b4337;
+}
+
+.session-status-chip.tone-warning {
+  background: rgba(214, 164, 88, 0.16);
+  color: #946323;
+}
+
+.session-status-chip.tone-neutral {
+  background: rgba(164, 149, 132, 0.14);
+  color: #76685b;
 }
 
 .continue-title {
@@ -691,9 +902,22 @@ onBeforeUnmount(() => {
 
 .session-row-body {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   min-width: 0;
+}
+
+.session-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
 }
 
 .session-row-title {
