@@ -123,11 +123,18 @@ function getAppName(mode) {
 }
 
 function buildFrontend() {
-  const result = spawnSync(npmCommand, ["run", "web:build"], {
-    cwd: root,
-    encoding: "utf8",
-    stdio: "inherit"
-  });
+  const result =
+    process.platform === "win32"
+      ? spawnSync(process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/c", npmCommand, "run", "web:build"], {
+          cwd: root,
+          encoding: "utf8",
+          stdio: "inherit"
+        })
+      : spawnSync(npmCommand, ["run", "web:build"], {
+          cwd: root,
+          encoding: "utf8",
+          stdio: "inherit"
+        });
 
   if (result.error) {
     throw result.error;
